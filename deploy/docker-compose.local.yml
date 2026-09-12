@@ -1,0 +1,13 @@
+services:
+  dashboard:
+    command: npm run dev -- --host 0.0.0.0
+    volumes:
+      - .:/app
+      - algodesk_node_modules:/app/node_modules
+  trader:
+    environment:
+      - TRADING_MODE=paper
+      - LIVE_TRADING_ENABLED=false
+
+volumes:
+  algodesk_node_modules:

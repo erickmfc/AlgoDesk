@@ -1,0 +1,15 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "4173:4173"
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=http://localhost:8000
+  trader:
+    build: ./apps/trader
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    restart: unless-stopped

@@ -1,0 +1,11 @@
+risk:
+  max_concurrent_positions: 2
+  max_position_percent: 10
+  max_total_exposure_percent: 25
+  risk_per_trade_percent: 0.25
+  daily_loss_limit_percent: 1
+  hard_drawdown_limit_percent: 5
+  stale_market_data_seconds: 30
+  allow_margin: false
+  allow_futures: false
+  allow_leverage: false

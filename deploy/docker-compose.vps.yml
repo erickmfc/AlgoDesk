@@ -1,0 +1,5 @@
+services:
+  dashboard:
+    restart: unless-stopped
+  trader:
+    restart: unless-stopped

@@ -1,0 +1,9 @@
+strategy:
+  id: ema-btc-01
+  type: ema_trend
+  symbol: BTCUSDT
+  interval: 1h
+  enabled: true
+  fast_ema: 20
+  slow_ema: 50
+  atr_period: 14
