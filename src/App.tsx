@@ -1,10 +1,15 @@
+'use client'
+
 import { useEffect, useMemo, useState } from 'react'
+import { motion } from 'framer-motion'
 import {
   Activity, Bell, Bot, ChartNoAxesCombined, ChevronRight, CircleDollarSign,
   Gauge, LayoutDashboard, LockKeyhole, Network, Radio,
   RefreshCw, Search, Settings2, ShieldAlert, SlidersHorizontal, Square,
   WalletCards, X, Zap,
 } from 'lucide-react'
+import { Line, LineChart, ResponsiveContainer } from 'recharts'
+import { Button } from './components/ui/button'
 
 type BotStatus = 'POSITION OPEN' | 'SCANNING' | 'WAITING' | 'HALTED' | 'NOT DEPLOYED'
 type Tone = 'cyan' | 'violet' | 'amber' | 'red'
@@ -62,6 +67,7 @@ type WalkForwardFold = {
 }
 type PaperSummary = {
   source?: string
+  mode?: string
   status?: string
   symbol?: string
   interval?: string
@@ -167,13 +173,13 @@ function buildDeskBots(summary: PaperSummary | null, hardStopped: boolean): Desk
 }
 
 const navItems = [
-  { id: 'operations', label: 'Operations', path: '/desk', icon: LayoutDashboard },
-  { id: 'bots', label: 'Bots', path: '/bots', icon: Bot },
-  { id: 'trades', label: 'Trades', path: '/trades', icon: Activity },
+  { id: 'operations', label: 'Operações', path: '/desk', icon: LayoutDashboard },
+  { id: 'bots', label: 'Robôs', path: '/bots', icon: Bot },
+  { id: 'trades', label: 'Entradas e saídas', path: '/trades', icon: Activity },
   { id: 'backtests', label: 'Backtests', path: '/backtests', icon: ChartNoAxesCombined },
-  { id: 'risk', label: 'Risk', path: '/risk', icon: ShieldAlert },
-  { id: 'system', label: 'System', path: '/system', icon: Network },
-  { id: 'settings', label: 'Settings', path: '/settings', icon: Settings2 },
+  { id: 'risk', label: 'Risco', path: '/risk', icon: ShieldAlert },
+  { id: 'system', label: 'Sistema', path: '/system', icon: Network },
+  { id: 'settings', label: 'Configurações', path: '/settings', icon: Settings2 },
 ]
 
 function pageForPath(pathname: string) {
@@ -188,12 +194,12 @@ function StatusMark({ tone, pulse = false }: { tone: Tone; pulse?: boolean }) {
 
 function BotAvatar({ status, tone }: { status: BotStatus; tone: Tone }) {
   return (
-    <div className={`bot-avatar ${toneClass(tone)} state-${status.toLowerCase().replaceAll(' ', '-')}`}>
+    <motion.div className={`bot-avatar ${toneClass(tone)} state-${status.toLowerCase().replaceAll(' ', '-')}`} animate={status === 'SCANNING' ? { y: [0, -2, 0] } : { y: 0 }} transition={{ duration: 2, repeat: status === 'SCANNING' ? Infinity : 0, ease: 'easeInOut' }}>
       <div className="avatar-shadow" />
       <div className="avatar-body"><div className="avatar-chest-line" /></div>
       <div className="avatar-head"><div className="avatar-visor"><span /><span /></div><div className="avatar-ear left" /><div className="avatar-ear right" /></div>
       {status === 'SCANNING' && <div className="scan-beam" />}
-    </div>
+    </motion.div>
   )
 }
 
@@ -234,12 +240,18 @@ function Sparkline({ values, label = 'Telemetry sparkline' }: { values?: number[
   return <svg className="sparkline" viewBox="0 0 180 44" preserveAspectRatio="none" aria-label={label}><path d={path} fill="none" stroke="currentColor" strokeWidth="2" /><path d={areaPath} fill="currentColor" opacity=".08" /></svg>
 }
 
+function EquityChart({ values }: { values: number[] }) {
+  const data = values.filter((value) => Number.isFinite(value)).map((equity, index) => ({ equity, index }))
+  if (data.length < 2) return <Sparkline values={values} label="Persisted paper equity" />
+  return <div style={{ width: '100%', height: 44 }}><ResponsiveContainer width="100%" height="100%"><LineChart data={data}><Line type="monotone" dataKey="equity" stroke="currentColor" strokeWidth={2} dot={false} isAnimationActive={false} /></LineChart></ResponsiveContainer></div>
+}
+
 function StatCard({ label, value, detail, tone = 'cyan', icon: Icon }: { label: string; value: string; detail: string; tone?: Tone; icon: typeof Activity }) {
   return <div className={`stat-card ${toneClass(tone)}`}><div className="stat-header"><span>{label}</span><Icon size={16} /></div><strong>{value}</strong><small>{detail}</small></div>
 }
 
-function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMeta, backtestState, backtestSplits, parameterSweepCount, walkForwardFolds, paperSummary, systemMetrics, riskConfig, equityPoints }: { page: string; bots: DeskBot[]; botsOnline: number; onSelect: (bot: DeskBot) => void; backtest: BacktestMetrics | null; backtestMeta: BacktestMeta | null; backtestState: 'loading' | 'ready' | 'error'; backtestSplits: BacktestSplit[]; parameterSweepCount: number; walkForwardFolds: WalkForwardFold[]; paperSummary: PaperSummary | null; systemMetrics: SystemMetrics | null; riskConfig: RiskConfig | null; equityPoints: EquityPoint[] }) {
-  const title = navItems.find((item) => item.id === page)?.label ?? 'Operations'
+function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMeta, backtestState, backtestSplits, parameterSweepCount, walkForwardFolds, paperSummary, systemMetrics, riskConfig, equityPoints, paperActivities }: { page: string; bots: DeskBot[]; botsOnline: number; onSelect: (bot: DeskBot) => void; backtest: BacktestMetrics | null; backtestMeta: BacktestMeta | null; backtestState: 'loading' | 'ready' | 'error'; backtestSplits: BacktestSplit[]; parameterSweepCount: number; walkForwardFolds: WalkForwardFold[]; paperSummary: PaperSummary | null; systemMetrics: SystemMetrics | null; riskConfig: RiskConfig | null; equityPoints: EquityPoint[]; paperActivities: PaperActivity[] }) {
+  const title = navItems.find((item) => item.id === page)?.label ?? 'Operações'
   const paperRunning = paperSummary?.status === 'running'
   const drawdown = Math.abs(paperSummary?.drawdown_percent ?? 0)
   const drawdownLimit = riskConfig?.hard_drawdown_limit_percent ?? 5
@@ -247,7 +259,7 @@ function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMet
   const dataHealthy = Boolean(systemMetrics?.database_connected && paperRunning)
   if (page === 'operations') return null
   return <section className="workspace-panel">
-    <div className="workspace-heading"><div><span className="section-kicker">ALGODESK / WORKSPACE</span><h2>{title}</h2><p>Superfície de controlo conectada ao motor paper trading.</p></div><button className="ghost-button"><RefreshCw size={15} /> Atualizar dados</button></div>
+    <div className="workspace-heading"><div><span className="section-kicker">ALGODESK / WORKSPACE</span><h2>{title}</h2><p>Superfície de controlo conectada ao motor paper trading.</p></div><Button variant="ghost" className="ghost-button" onClick={() => window.location.reload()}><RefreshCw size={15} /> Atualizar dados</Button></div>
     <div className="workspace-grid">
       {page === 'bots' && bots.map((bot) => <button className="workspace-row" key={bot.id} onClick={() => onSelect(bot)}><BotAvatar status={bot.status} tone={bot.tone} /><div><strong>{bot.id}</strong><span>{bot.symbol} · {bot.strategy}</span></div><span className={`status-chip ${toneClass(bot.tone)}`}>{bot.status}</span><b>{bot.pnl}</b><ChevronRight size={16} /></button>)}
       {page === 'backtests' && <>
@@ -258,9 +270,14 @@ function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMet
         <div className="detail-panel split-panel"><div className="panel-heading"><span>Validation splits</span><span>{backtestSplits.length}/3</span></div>{backtestSplits.length ? backtestSplits.map((split) => <div className="guardrail" key={split.name}><StatusMark tone={split.name === 'out_of_sample' ? 'amber' : 'cyan'} /><span>{split.name.replaceAll('_', ' ')}</span><b>{split.metrics.return_percent.toFixed(2)}% · {split.metrics.trades} trades</b></div>) : <p>Waiting for independent in-sample, validation and out-of-sample results.</p>}<small>Neighbor EMA sweep: {parameterSweepCount || '—'} variants · no OOS tuning</small></div>
         <div className="detail-panel split-panel"><div className="panel-heading"><span>Walk-forward OOS</span><span>{walkForwardFolds.length} fold{walkForwardFolds.length === 1 ? '' : 's'}</span></div>{walkForwardFolds.length ? walkForwardFolds.map((fold) => <div className="guardrail" key={fold.fold}><StatusMark tone="violet" /><span>EMA {fold.selected.fast_period}/{fold.selected.slow_period}</span><b>{fold.out_of_sample.metrics.return_percent.toFixed(2)}% · {fold.out_of_sample.metrics.trades} trades</b></div>) : <p>Independent validation and untouched OOS windows need more closed candles.</p>}<small>Parameters are selected on validation only; OOS is scored after selection.</small></div>
       </>}
-      {page !== 'bots' && page !== 'backtests' && <>
+      {page === 'trades' && <div className="detail-panel split-panel"><div className="panel-heading"><span>Paper event log</span><span>{paperActivities.length} events</span></div>{paperActivities.length ? paperActivities.map((activity, index) => <div className="guardrail" key={`${activity.time}-${index}`}><StatusMark tone={activity.tone} /><span>{activity.time} · {activity.bot}</span><b>{activity.label}</b><small>{activity.text}</small></div>) : <p>No persisted paper events are available yet. The worker only records activity after a closed-candle cycle.</p>}<small>Source: persisted PAPER engine events from Binance closed candles.</small></div>}
+      {page === 'settings' && <>
+        <div className="detail-panel"><div className="panel-heading"><span>Runtime mode</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="cyan" /><span>Trading mode</span><b>{paperSummary?.mode?.toUpperCase() ?? 'PAPER'}</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Live trading</span><b>LOCKED</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Market source</span><b>BINANCE SPOT</b></div><small>Secrets are server-side only and are never exposed in this dashboard.</small></div>
+        <div className="detail-panel"><div className="panel-heading"><span>Strategy profile</span><StatusMark tone="violet" /></div><div className="metric-list"><span>Strategy <b>EMA Trend</b></span><span>Symbol <b>{paperSummary?.symbol ?? 'BTCUSDT'}</b></span><span>Interval <b>{paperSummary?.interval ?? '1h'}</b></span><span>Worker <b>{paperSummary?.status?.toUpperCase() ?? 'STARTING'}</b></span></div></div>
+      </>}
+      {page !== 'bots' && page !== 'backtests' && page !== 'trades' && page !== 'settings' && <>
         <div className="detail-panel"><div className="panel-heading"><span>System overview</span><StatusMark tone={dataHealthy ? 'cyan' : 'amber'} pulse={dataHealthy} /></div><h3>{title === 'Risk' ? (paperRunning ? 'Risk Engine armed' : 'Risk telemetry waiting') : title === 'System' ? (systemMetrics?.database_connected ? 'System healthy' : 'System unavailable') : title === 'Trades' ? `${paperSummary?.trades_24h ?? 0} closed paper trades` : `${title} is ready`}</h3><p>{title === 'Risk' ? 'Risk is evaluated before each paper intent; no live order path is enabled.' : title === 'System' ? 'Runtime health comes from the FastAPI readiness and metrics endpoints.' : title === 'Trades' ? 'The list is backed by the paper engine events generated from closed Binance candles.' : 'Public Binance market data is live; account data remains read-only and optional.'}</p><div className="progress-track"><span style={{ width: `${title === 'Risk' ? riskBudgetUsed : dataHealthy ? 100 : 0}%` }} /></div><small>{title === 'Risk' ? `${drawdown.toFixed(2)}% drawdown used · limit ${drawdownLimit.toFixed(2)}%` : title === 'System' ? `${systemMetrics?.websocket_connections ?? 0} market stream connection(s) · ${systemMetrics?.websocket_reconnects ?? 0} reconnect(s)` : `${botsOnline}/5 visual stations backed by a deployed paper engine`}</small></div>
-        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Equity telemetry</span><span className={paperSummary && paperSummary.daily_pnl >= 0 ? 'positive' : 'negative'}>{paperSummary ? formatSignedUsd(paperSummary.daily_pnl) : '—'}</span></div><Sparkline values={equityPoints.map((point) => point.equity)} label="Persisted paper equity" /><div className="chart-axis"><span>Paper start</span><span>{paperSummary?.last_candle_at ? new Date(paperSummary.last_candle_at).toLocaleDateString('pt-BR') : '—'}</span><span>{paperSummary?.last_run_at ? new Date(paperSummary.last_run_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</span></div></div>
+        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Equity telemetry</span><span className={paperSummary && paperSummary.daily_pnl >= 0 ? 'positive' : 'negative'}>{paperSummary ? formatSignedUsd(paperSummary.daily_pnl) : '—'}</span></div><EquityChart values={equityPoints.map((point) => point.equity)} /><div className="chart-axis"><span>Paper start</span><span>{paperSummary?.last_candle_at ? new Date(paperSummary.last_candle_at).toLocaleDateString('pt-BR') : '—'}</span><span>{paperSummary?.last_run_at ? new Date(paperSummary.last_run_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</span></div></div>
         <div className="detail-panel"><div className="panel-heading"><span>Guardrails</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="cyan" /><span>Live trading locked</span><b>ON</b></div><div className="guardrail"><StatusMark tone={paperRunning ? 'amber' : 'red'} /><span>Paper mode</span><b>{paperRunning ? 'ACTIVE' : 'WAITING'}</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Spot only</span><b>ON</b></div></div>
       </>}
     </div>
@@ -268,7 +285,7 @@ function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMet
 }
 
 function App() {
-  const [activePage, setActivePage] = useState(() => pageForPath(window.location.pathname))
+  const [activePage, setActivePage] = useState('operations')
   const [selectedBot, setSelectedBot] = useState<DeskBot | null>(null)
   const [search, setSearch] = useState('')
   const [hardStopped, setHardStopped] = useState(false)
@@ -290,14 +307,14 @@ function App() {
   const [riskConfig, setRiskConfig] = useState<RiskConfig | null>(null)
   const [equityPoints, setEquityPoints] = useState<EquityPoint[]>([])
 
-  useEffect(() => { const timer = window.setInterval(() => setClock(new Date()), 1000); return () => window.clearInterval(timer) }, [])
+  useEffect(() => { setActivePage(pageForPath(window.location.pathname)); const timer = window.setInterval(() => setClock(new Date()), 1000); return () => window.clearInterval(timer) }, [])
   useEffect(() => {
     const onPopState = () => setActivePage(pageForPath(window.location.pathname))
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     const loadEquity = () => fetch(`${apiUrl}/api/paper/equity?limit=60`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { points?: EquityPoint[] } : Promise.reject(new Error('equity request failed')))
       .then((payload) => setEquityPoints((payload.points ?? []).filter((point) => Number.isFinite(point.equity))))
@@ -308,8 +325,8 @@ function App() {
   }, [])
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 3600); return () => window.clearTimeout(timer) }, [notice])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
-    const wsUrl = import.meta.env.VITE_WS_URL ?? apiUrl.replace(/^http/, 'ws')
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? apiUrl.replace(/^http/, 'ws')
     let socket: WebSocket | undefined
     let disposed = false
     const loadMarket = async () => {
@@ -345,14 +362,14 @@ function App() {
     return () => { disposed = true; socket?.close(); window.clearInterval(timer) }
   }, [])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     fetch(`${apiUrl}/api/account/summary`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { connected?: boolean; configured?: boolean } : Promise.reject(new Error('account request failed')))
       .then((payload) => setAccountStatus(payload.connected ? 'connected' : payload.configured ? 'error' : 'not-configured'))
       .catch(() => setAccountStatus('error'))
   }, [])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     fetch(`${apiUrl}/api/backtests/binance?symbol=BTCUSDT&interval=1h&limit=500`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { metrics?: BacktestMetrics; data_points?: number; data_start?: string; data_end?: string; lookahead?: boolean; frictions?: BacktestMeta['frictions']; splits?: BacktestSplit[]; parameter_sweep?: unknown[]; walk_forward?: { folds?: WalkForwardFold[] } } : Promise.reject(new Error('backtest request failed')))
       .then((payload) => {
@@ -366,7 +383,7 @@ function App() {
       .catch(() => { setBacktestMetrics(null); setBacktestMeta(null); setBacktestSplits([]); setParameterSweepCount(0); setWalkForwardFolds([]); setBacktestState('error') })
   }, [])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     const loadPaper = () => fetch(`${apiUrl}/api/paper/summary`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as PaperSummary : Promise.reject(new Error('paper summary request failed')))
       .then((payload) => { setPaperSummary(payload); setHardStopped(payload.hard_stop ?? false) })
@@ -376,7 +393,7 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     const loadEvents = () => fetch(`${apiUrl}/api/paper/events`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { events?: PaperActivity[] } : Promise.reject(new Error('paper events request failed')))
       .then((payload) => setPaperActivities(payload.events ?? []))
@@ -386,7 +403,7 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     const loadSystemMetrics = () => fetch(`${apiUrl}/api/system/metrics`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as SystemMetrics : Promise.reject(new Error('system metrics request failed')))
       .then((payload) => setSystemMetrics(payload))
@@ -396,7 +413,7 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     fetch(`${apiUrl}/api/risk`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { config?: RiskConfig } : Promise.reject(new Error('risk request failed')))
       .then((payload) => setRiskConfig(payload.config ?? null))
@@ -407,7 +424,7 @@ function App() {
   const visibleBots = useMemo(() => bots.filter((bot) => `${bot.id} ${bot.symbol} ${bot.strategy} ${bot.status}`.toLowerCase().includes(search.toLowerCase())), [bots, search])
   const botsOnline = paperSummary?.status === 'running' ? paperSummary.bot_count : 0
   const currentTime = clock.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  const displayActivities: PaperActivity[] = paperActivities.length ? paperActivities : [{ time: '—', bot: 'PAPER', label: paperSummary?.status === 'error' ? 'ERROR' : 'WAITING', tone: paperSummary?.status === 'error' ? 'red' : 'amber', text: paperSummary?.status === 'error' ? (paperSummary.last_error ?? 'Paper engine unavailable') : 'Waiting for the first closed-candle signal' }]
+  const displayActivities: PaperActivity[] = paperActivities.length ? paperActivities : [{ time: '—', bot: 'PAPER', label: paperSummary?.status === 'error' ? 'ERRO' : 'AGUARDANDO', tone: paperSummary?.status === 'error' ? 'red' : 'amber', text: paperSummary?.status === 'error' ? (paperSummary.last_error ?? 'Motor PAPER indisponível') : 'Aguardando o primeiro sinal de candle fechado' }]
 
   const selectBot = (bot: DeskBot) => { setSelectedBot(bot); setNotice(`${bot.id} selecionado para inspeção`) }
   const navigate = (page: string) => {
@@ -417,7 +434,7 @@ function App() {
     setActivePage(page)
   }
   const setPaperKillSwitch = async (enabled: boolean, confirmation?: string) => {
-    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     try {
       const response = await fetch(`${apiUrl}/api/paper/kill-switch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, confirmation }) })
       if (!response.ok) throw new Error((await response.json() as { detail?: string }).detail ?? 'kill switch request failed')
@@ -446,10 +463,10 @@ function App() {
       <header className="topbar"><div className="breadcrumb"><span>ALGODESK</span><ChevronRight size={14} /><b>{navItems.find((item) => item.id === activePage)?.label.toUpperCase()}</b></div><div className="top-actions"><span className={`connection ${feedStatus === 'offline' ? 'is-offline' : ''}`}><StatusMark tone={feedStatus === 'offline' ? 'amber' : 'cyan'} pulse={feedStatus !== 'offline'} /> {feedStatus === 'websocket' ? 'Binance WebSocket' : feedStatus === 'rest' ? 'Binance REST connected' : 'Binance feed unavailable'}</span><span className="top-time">{currentTime} BRT</span><button className="icon-button" aria-label="Notificações"><Bell size={17} /></button><button className="avatar-user">AD</button><span className="user-name">AlgoTrader</span></div></header>
 
       <div className="content">
-        <div className="page-heading"><div><p className="section-kicker">TRADING CONTROL ROOM · BINANCE SPOT · PUBLIC TICKER</p><h1>{activePage === 'operations' ? 'Operations Desk' : navItems.find((item) => item.id === activePage)?.label}</h1><p className="heading-sub">{activePage === 'operations' ? 'One deployed paper engine. Five transparent visual stations.' : 'Observe, validate and keep every decision inside the guardrails.'}</p></div><div className="heading-controls"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a bot..." aria-label="Buscar bot" /></div><div className="mode-select"><span className="mode-dot" />PAPER · LIVE LOCKED<ChevronRight size={14} /></div></div></div>
+        <div className="page-heading"><div><p className="section-kicker">SALA DE OPERAÇÕES · BINANCE SPOT · DADOS PÚBLICOS</p><h1>{activePage === 'operations' ? 'Sala de Operações' : navItems.find((item) => item.id === activePage)?.label}</h1><p className="heading-sub">{activePage === 'operations' ? 'Um motor PAPER ativo. Cinco estações visuais transparentes.' : 'Observe e valide cada decisão dentro dos limites de segurança.'}</p></div><div className="heading-controls"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar robô..." aria-label="Buscar robô" /></div><div className="mode-select"><span className="mode-dot" />PAPER · LIVE BLOQUEADO<ChevronRight size={14} /></div></div></div>
         <div className="stats-row"><StatCard label="Paper equity · real market" value={paperSummary ? `$ ${paperSummary.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'} detail={paperSummary?.status === 'running' ? 'Engine · Binance closed candles' : 'Engine warming up'} icon={WalletCards} /><StatCard label="Paper realized PnL" value={formatSignedUsd(paperSummary?.daily_pnl)} detail={paperSummary?.status === 'running' ? 'Since paper session start' : 'Awaiting paper engine'} tone="cyan" icon={CircleDollarSign} /><StatCard label="Paper drawdown" value={paperSummary ? `${paperSummary.drawdown_percent.toFixed(2)}%` : '—'} detail={`Risk limit · ${(riskConfig?.hard_drawdown_limit_percent ?? 5).toFixed(2)}%`} tone="red" icon={Gauge} /><StatCard label="Bots online · local" value={`${botsOnline} / ${bots.length}`} detail="Only deployed engines count as online" tone="amber" icon={Bot} /><button className={`stop-button ${hardStopped ? 'is-stopped' : ''}`} onClick={hardStopped ? () => setHardStopped(false) : stopAll}><Square size={17} fill="currentColor" />{hardStopped ? 'HARD STOP ACTIVE' : 'PARAR TODOS OS ROBÔS'}</button></div>
 
-      <PageWorkspace page={activePage} bots={bots} botsOnline={botsOnline} onSelect={selectBot} backtest={backtestMetrics} backtestMeta={backtestMeta} backtestState={backtestState} backtestSplits={backtestSplits} parameterSweepCount={parameterSweepCount} walkForwardFolds={walkForwardFolds} paperSummary={paperSummary} systemMetrics={systemMetrics} riskConfig={riskConfig} equityPoints={equityPoints} />
+      <PageWorkspace page={activePage} bots={bots} botsOnline={botsOnline} onSelect={selectBot} backtest={backtestMetrics} backtestMeta={backtestMeta} backtestState={backtestState} backtestSplits={backtestSplits} parameterSweepCount={parameterSweepCount} walkForwardFolds={walkForwardFolds} paperSummary={paperSummary} systemMetrics={systemMetrics} riskConfig={riskConfig} equityPoints={equityPoints} paperActivities={paperActivities} />
         {activePage === 'operations' && <div className="operations-grid">
           <section className="desk-panel"><div className="desk-panel-header"><div><span className="panel-eyebrow"><Radio size={13} /> PAPER SIMULATION</span><h2>Trading floor</h2></div><div className="desk-legend"><span><i className="legend-dot cyan" />Open</span><span><i className="legend-dot violet" />Scanning</span><span><i className="legend-dot amber" />Waiting</span><span><i className="legend-dot red" />Halted</span></div></div>
             <div className="trading-floor"><div className="floor-back-wall"><div className="wall-screen screen-map"><span>MARKET GRID</span><div className="world-dots" /></div><div className="wall-screen screen-chart"><span>BTC / ETH · BINANCE PUBLIC</span><div className="market-values"><b>₿ {livePrices.BTCUSDT ? `$${livePrices.BTCUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}</b><b>Ξ {livePrices.ETHUSDT ? `$${livePrices.ETHUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}</b></div><small className="market-source">{feedStatus === 'websocket' ? 'LIVE WEBSOCKET TICKER' : feedStatus === 'rest' ? 'LIVE REST TICKER' : 'NO LIVE MARKET FEED'}</small><Sparkline /></div><div className="wall-copy">DISCIPLINE<br /><em>BEATS</em><br />EMOTION</div></div><div className="floor-grid" /><div className="floor-light light-one" /><div className="floor-light light-two" />{visibleBots.map((bot, index) => <DeskStation bot={bot} index={index} key={bot.id} onSelect={() => selectBot(bot)} selected={selectedBot?.id === bot.id} />)}<div className="floor-label">ALGODESK <span>///</span> PAPER CONTROL FLOOR</div></div>

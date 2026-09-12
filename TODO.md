@@ -33,3 +33,4 @@
 - [x] Restore Testnet base/quote balances and average entry price from Binance fills, fail-closed on mismatch
 - [x] Fail-closed market-cycle alert/pause policy for the long-running worker
 - [ ] Run Testnet soak test before any live-candidate review
+- [x] Add repeatable read-only runtime verification for health, readiness, market data, paper state and backtest

@@ -1,11 +1,14 @@
 node_modules/
 dist/
+.next/
+tsconfig.tsbuildinfo
 .venv/
 .env
 __pycache__/
 .pytest_cache/
 *.pyc
 data/*.db
+**/data/*.db
 data/*.csv
 data/postgres/
 coverage.xml

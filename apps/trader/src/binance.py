@@ -74,6 +74,42 @@ class BinancePublicClient:
             raise ValueError("Binance returned no klines")
         return candles
 
+    def klines_history(
+        self, symbol: str, interval: str = "1h", *, start_time: int, end_time: int | None = None,
+        page_size: int = 1000,
+    ) -> list[Candle]:
+        """Download a deterministic, gap-preserving historical range page by page."""
+        if page_size < 1 or page_size > 1000:
+            raise ValueError("page_size must be between 1 and 1000")
+        cursor = int(start_time)
+        candles: list[Candle] = []
+        while True:
+            params: dict[str, object] = {
+                "symbol": symbol.upper(), "interval": interval, "limit": page_size,
+                "startTime": cursor,
+            }
+            if end_time is not None:
+                params["endTime"] = int(end_time)
+            query = urlencode(params)
+            request = Request(
+                f"{self.base_url}/api/v3/klines?{query}",
+                headers={"User-Agent": "AlgoDesk/0.1"},
+            )
+            with urlopen(request, timeout=12) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
+                payload = json.load(response)
+            page = [
+                Candle(int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5]))
+                for row in payload if isinstance(row, list) and len(row) >= 7
+            ]
+            if not page:
+                break
+            candles.extend(page)
+            next_cursor = page[-1].open_time + 1
+            if len(page) < page_size or next_cursor <= cursor or (end_time is not None and next_cursor > end_time):
+                break
+            cursor = next_cursor
+        return sorted({c.open_time: c for c in candles}.values(), key=lambda c: c.open_time)
+
 
 class BinancePrivateClient(BinancePublicClient):
     """Signed account and low-level Spot order endpoint adapter."""

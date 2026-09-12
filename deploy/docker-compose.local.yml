@@ -1,8 +1,8 @@
 services:
   dashboard:
     # Serve the Linux image build; host node_modules cannot be mounted into
-    # Alpine because its native Vite bindings target Windows.
-    command: npm run preview -- --host 0.0.0.0
+    # Alpine because native frontend bindings are platform-specific.
+    command: npm run start
   api:
     volumes:
       - ./configs:/app/configs:ro
