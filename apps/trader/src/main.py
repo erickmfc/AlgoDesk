@@ -1,13 +1,12 @@
-"""AlgoDesk trading service seam.
+"""AlgoDesk read-only service seam for paper trading and public market data.
 
-This v0.1 service intentionally exposes health/readiness only. Trading is
-disabled until the domain, paper broker, persistence and reconciliation gates
-are implemented and tested.
+Trading remains disabled until authenticated execution, persistence and
+reconciliation gates are implemented and explicitly enabled.
 """
 import os
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from .binance import BinancePublicClient
@@ -61,7 +60,8 @@ def risk_state() -> dict[str, object]:
 
 
 @app.get("/api/market/ticker")
-def market_ticker(symbol: str = "BTCUSDT,ETHUSDT") -> dict[str, object]:
+def market_ticker(response: Response, symbol: str = "BTCUSDT,ETHUSDT") -> dict[str, object]:
+    response.headers["Cache-Control"] = "no-store"
     symbols = [value.strip() for value in symbol.split(",") if value.strip()]
     tickers = market_client.ticker_price(symbols[:5])
     return {"source": "binance-public-spot", "tickers": [ticker.__dict__ for ticker in tickers]}

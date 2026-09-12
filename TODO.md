@@ -14,12 +14,10 @@
 
 ## Next implementation gates
 
-- [ ] Add FastAPI service and typed read-only endpoints
-- [ ] Add SQLAlchemy/Alembic models and PostgreSQL healthcheck
-- [ ] Add PaperBroker with idempotent order state machine
-- [ ] Add Binance Spot adapter (market data first)
-- [ ] Add EMA/ATR strategy and candle close handling
-- [ ] Add backtest fees, slippage, metrics and buy-and-hold comparison
-- [ ] Add Docker Compose local/VPS overlays
-- [ ] Add pytest + frontend CI checks
+- [ ] Persist PAPER candles, intents, orders and portfolio snapshots in PostgreSQL
+- [ ] Add authenticated, server-side, read-only Binance account summary
+- [ ] Add Binance Spot WebSocket stream, reconnect and stale-data monitoring
+- [ ] Wire EMA/ATR strategy signals to the PAPER broker and candle-close scheduler
+- [ ] Add buy-and-hold comparison and walk-forward backtest splits
+- [ ] Add PostgreSQL healthcheck, migrations and reconciliation telemetry
 - [ ] Run Testnet soak test before any live-candidate review

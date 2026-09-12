@@ -41,3 +41,5 @@ button { border: 0; color: inherit; cursor: pointer; }
 
 .market-values { position: absolute; left: 13px; bottom: 42px; display: flex; gap: 12px; color: #b2d9e7; font: 8px 'DM Mono', monospace; }
 .market-values b { font-weight: 400; }
+.connection.is-offline { color: #edc467; }
+.market-source { position: absolute; left: 13px; bottom: 31px; color: #5f889e; font: 7px 'DM Mono', monospace; letter-spacing: .08em; }
