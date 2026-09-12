@@ -1,7 +1,7 @@
 # Architecture
 
 ```text
-Binance REST/WebSocket -> FastAPI trader -> read-only dashboard
+Binance REST/WebSocket -> trader worker -> PostgreSQL snapshots -> API -> dashboard
                          |
                          +-> closed candles -> EMA -> TradeIntent
                          +-> RiskEngine -> OrderManager -> PaperBroker

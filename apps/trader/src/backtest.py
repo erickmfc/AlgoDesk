@@ -1,9 +1,13 @@
-"""Deterministic long-only backtest with explicit trading frictions."""
+"""Deterministic, long-only backtesting with explicit market frictions.
+
+The engine is intentionally small and auditable. It only consumes closed
+candles and never calls an exchange or an order endpoint.
+"""
 
 from dataclasses import dataclass
 from math import sqrt
 
-from .strategies import Candle, EmaTrendStrategy
+from .strategies import Candle, EmaTrendStrategy, Signal, atr
 
 
 @dataclass(frozen=True)
@@ -11,9 +15,19 @@ class BacktestConfig:
     starting_cash: float = 10_000.0
     fee_bps: float = 10.0
     slippage_bps: float = 5.0
+    spread_bps: float = 0.0
+    latency_bars: int = 0
+    partial_fill_ratio: float = 1.0
     position_percent: float = 10.0
     fast_period: int = 20
     slow_period: int = 50
+    atr_period: int = 14
+    stop_loss_atr: float = 0.0
+    take_profit_atr: float = 0.0
+    min_quantity: float = 0.0
+    min_notional: float = 0.0
+    tick_size: float = 0.0
+    step_size: float = 0.0
     periods_per_year: float = 365.0
 
 
@@ -27,6 +41,8 @@ class CompletedTrade:
     gross_pnl: float
     fees: float
     slippage: float
+    net_pnl: float = 0.0
+    exit_reason: str = "signal"
 
 
 @dataclass(frozen=True)
@@ -39,7 +55,9 @@ class BacktestResult:
     trades: int
     fees: float
     slippage: float
+    spread: float
     exposure_percent: float
+    max_exposure_percent: float
     net_profit: float
     cagr_percent: float
     sharpe: float
@@ -50,100 +68,219 @@ class BacktestResult:
     recovery_factor: float
     buy_hold_return_percent: float
     buy_hold_equity: float
+    partial_fills: int
+    stop_loss_trades: int
+    take_profit_trades: int
+    latency_bars: int
+
+
+def _validate_config(config: BacktestConfig) -> None:
+    if (
+        config.starting_cash <= 0
+        or not 0 < config.position_percent <= 100
+        or config.periods_per_year <= 0
+        or config.fee_bps < 0
+        or config.slippage_bps < 0
+        or config.spread_bps < 0
+        or config.latency_bars < 0
+        or not 0 < config.partial_fill_ratio <= 1
+        or config.fast_period <= 0
+        or config.slow_period <= config.fast_period
+        or config.atr_period <= 0
+        or config.stop_loss_atr < 0
+        or config.take_profit_atr < 0
+        or config.min_quantity < 0
+        or config.min_notional < 0
+        or config.tick_size < 0
+        or config.step_size < 0
+    ):
+        raise ValueError("invalid backtest configuration")
+
+
+def _floor_increment(value: float, increment: float) -> float:
+    if increment <= 0:
+        return value
+    return int(value / increment) * increment
+
+
+def _fill_price(raw_price: float, side: str, config: BacktestConfig) -> tuple[float, float, float]:
+    spread_component = config.spread_bps / 20_000
+    slippage_component = config.slippage_bps / 10_000
+    direction = 1 if side == "BUY" else -1
+    with_spread = raw_price * (1 + direction * spread_component)
+    filled = raw_price * (1 + direction * (spread_component + slippage_component))
+    slippage_cost = abs(filled - with_spread)
+    spread_cost = abs(with_spread - raw_price)
+    return filled, slippage_cost, spread_cost
 
 
 def run_backtest(
     candles: list[Candle], config: BacktestConfig | None = None
 ) -> tuple[BacktestResult, list[CompletedTrade]]:
     config = config or BacktestConfig()
-    if (
-        config.starting_cash <= 0
-        or not 0 < config.position_percent <= 100
-        or config.periods_per_year <= 0
-    ):
-        raise ValueError("starting_cash, position_percent and periods_per_year must be valid")
-    signals = {
-        signal.timestamp: signal
-        for signal in EmaTrendStrategy(config.fast_period, config.slow_period).signals(candles)
-    }
+    _validate_config(config)
+    if not candles:
+        raise ValueError("at least one candle is required")
+
+    strategy_signals = EmaTrendStrategy(config.fast_period, config.slow_period).signals(candles)
+    candle_indexes = {candle.open_time: index for index, candle in enumerate(candles)}
+    scheduled_signals: dict[int, Signal] = {}
+    for signal in strategy_signals:
+        source_index = candle_indexes.get(signal.timestamp)
+        if source_index is None:
+            continue
+        execution_index = source_index + config.latency_bars
+        if execution_index < len(candles):
+            scheduled_signals[execution_index] = signal
+
+    atr_values = atr(candles, config.atr_period)
     cash = config.starting_cash
     quantity = 0.0
     entry_time = 0
     entry_price = 0.0
-    entry_fee = 0.0
-    trade_slippage = 0.0
+    entry_fee_per_unit = 0.0
+    entry_slippage_per_unit = 0.0
+    stop_price: float | None = None
+    take_profit_price: float | None = None
     peak_equity = cash
     max_drawdown = 0.0
     fees_total = 0.0
     slippage_total = 0.0
+    spread_total = 0.0
     trades: list[CompletedTrade] = []
     equity_curve: list[float] = []
-    for candle in candles:
-        signal = signals.get(candle.open_time)
-        if signal and signal.action == "BUY" and quantity == 0:
-            notional = cash * config.position_percent / 100
-            fill_price = candle.close * (1 + config.slippage_bps / 10_000)
-            quantity = notional / fill_price
-            entry_fee = notional * config.fee_bps / 10_000
-            cash -= notional + entry_fee
-            entry_time, entry_price = candle.open_time, fill_price
-            fees_total += entry_fee
-            trade_slippage = abs(fill_price - candle.close) * quantity
-            slippage_total += trade_slippage
-        elif signal and signal.action == "SELL" and quantity:
-            fill_price = candle.close * (1 - config.slippage_bps / 10_000)
-            notional = quantity * fill_price
-            exit_fee = notional * config.fee_bps / 10_000
-            cash += notional - exit_fee
-            gross_pnl = (fill_price - entry_price) * quantity
-            exit_slippage = abs(candle.close - fill_price) * quantity
-            trade_slippage += exit_slippage
-            trades.append(
-                CompletedTrade(
-                    entry_time,
-                    candle.open_time,
-                    entry_price,
-                    fill_price,
-                    quantity,
-                    gross_pnl,
-                    entry_fee + exit_fee,
-                    trade_slippage,
-                )
-            )
-            fees_total += exit_fee
-            slippage_total += exit_slippage
-            quantity = 0.0
-            entry_fee = 0.0
-            trade_slippage = 0.0
-        equity = cash + (quantity * candle.close)
-        equity_curve.append(equity)
-        peak_equity = max(peak_equity, equity)
-        max_drawdown = max(max_drawdown, (peak_equity - equity) / peak_equity * 100)
-    if quantity and candles:
-        final = candles[-1]
-        fill_price = final.close * (1 - config.slippage_bps / 10_000)
-        notional = quantity * fill_price
+    invested_bars = 0
+    max_exposure = 0.0
+    partial_fills = 0
+    stop_loss_trades = 0
+    take_profit_trades = 0
+
+    def close_position(index: int, raw_price: float, reason: str) -> None:
+        nonlocal cash, quantity, entry_time, entry_price
+        nonlocal entry_fee_per_unit, entry_slippage_per_unit, stop_price, take_profit_price
+        nonlocal fees_total, slippage_total, spread_total, stop_loss_trades, take_profit_trades
+        if quantity <= 0:
+            return
+        fill_price, slippage_per_unit, spread_per_unit = _fill_price(raw_price, "SELL", config)
+        filled_quantity = quantity * config.partial_fill_ratio
+        if config.partial_fill_ratio >= 1:
+            filled_quantity = quantity
+        filled_quantity = max(0.0, min(quantity, filled_quantity))
+        if filled_quantity <= 0:
+            return
+        notional = filled_quantity * fill_price
         exit_fee = notional * config.fee_bps / 10_000
+        allocated_entry_fee = entry_fee_per_unit * filled_quantity
+        allocated_entry_slippage = entry_slippage_per_unit * filled_quantity
+        gross_pnl = (fill_price - entry_price) * filled_quantity
+        total_fees = allocated_entry_fee + exit_fee
+        total_slippage = allocated_entry_slippage + slippage_per_unit * filled_quantity
+        net_pnl = gross_pnl - total_fees
         cash += notional - exit_fee
         fees_total += exit_fee
-        exit_slippage = abs(final.close - fill_price) * quantity
-        slippage_total += exit_slippage
-        trade_slippage += exit_slippage
+        slippage_total += slippage_per_unit * filled_quantity
+        spread_total += spread_per_unit * filled_quantity
         trades.append(
             CompletedTrade(
                 entry_time,
-                final.open_time,
+                candles[index].open_time,
                 entry_price,
                 fill_price,
-                quantity,
-                (fill_price - entry_price) * quantity,
-                entry_fee + exit_fee,
-                trade_slippage,
+                filled_quantity,
+                gross_pnl,
+                total_fees,
+                total_slippage,
+                net_pnl,
+                reason,
             )
         )
-    winners = sum(1 for trade in trades if trade.gross_pnl > 0)
-    gross_wins = sum(trade.gross_pnl for trade in trades if trade.gross_pnl > 0)
-    gross_losses = abs(sum(trade.gross_pnl for trade in trades if trade.gross_pnl < 0))
+        quantity -= filled_quantity
+        if reason == "stop_loss":
+            stop_loss_trades += 1
+        elif reason == "take_profit":
+            take_profit_trades += 1
+        if quantity <= 1e-12:
+            quantity = 0.0
+            entry_time = 0
+            entry_price = 0.0
+            entry_fee_per_unit = 0.0
+            entry_slippage_per_unit = 0.0
+            stop_price = None
+            take_profit_price = None
+
+    for index, candle in enumerate(candles):
+        if quantity > 0:
+            # If both levels are touched by one bar, assume the stop happened
+            # first. This conservative rule avoids optimistic fills.
+            if stop_price is not None and candle.low <= stop_price:
+                close_position(index, stop_price, "stop_loss")
+            elif take_profit_price is not None and candle.high >= take_profit_price:
+                close_position(index, take_profit_price, "take_profit")
+
+        scheduled_signal = scheduled_signals.get(index)
+        if scheduled_signal and scheduled_signal.action == "BUY" and quantity == 0:
+            raw_price = candle.close if config.latency_bars == 0 else candle.open
+            fill_price, slippage_per_unit, spread_per_unit = _fill_price(raw_price, "BUY", config)
+            requested_quantity = (cash * config.position_percent / 100) / fill_price
+            requested_quantity = _floor_increment(requested_quantity, config.step_size)
+            if config.min_quantity and requested_quantity < config.min_quantity:
+                requested_quantity = 0.0
+            if config.min_notional and requested_quantity * fill_price < config.min_notional:
+                requested_quantity = 0.0
+            if requested_quantity > 0:
+                fill_quantity = requested_quantity * config.partial_fill_ratio
+                if config.partial_fill_ratio >= 1:
+                    fill_quantity = requested_quantity
+                fill_quantity = _floor_increment(fill_quantity, config.step_size)
+                notional = fill_quantity * fill_price
+                if fill_quantity > 0 and (
+                    not config.min_notional or notional >= config.min_notional
+                ):
+                    entry_fee = notional * config.fee_bps / 10_000
+                    cash -= notional + entry_fee
+                    quantity = fill_quantity
+                    entry_time = scheduled_signal.timestamp
+                    entry_price = fill_price
+                    entry_fee_per_unit = entry_fee / fill_quantity
+                    entry_slippage_per_unit = slippage_per_unit
+                    fees_total += entry_fee
+                    slippage_total += slippage_per_unit * fill_quantity
+                    spread_total += spread_per_unit * fill_quantity
+                    if config.partial_fill_ratio < 1:
+                        partial_fills += 1
+                    volatility = atr_values[index] if index < len(atr_values) else 0.0
+                    stop_price = (
+                        fill_price - volatility * config.stop_loss_atr
+                        if config.stop_loss_atr and volatility > 0
+                        else None
+                    )
+                    take_profit_price = (
+                        fill_price + volatility * config.take_profit_atr
+                        if config.take_profit_atr and volatility > 0
+                        else None
+                    )
+        elif scheduled_signal and scheduled_signal.action == "SELL" and quantity > 0:
+            raw_price = candle.close if config.latency_bars == 0 else candle.open
+            close_position(index, raw_price, "signal")
+            if config.partial_fill_ratio < 1 and quantity > 0:
+                partial_fills += 1
+
+        equity = cash + quantity * candle.close
+        equity_curve.append(equity)
+        if quantity > 0:
+            invested_bars += 1
+            exposure = quantity * candle.close / equity * 100 if equity else 0.0
+            max_exposure = max(max_exposure, exposure)
+        peak_equity = max(peak_equity, equity)
+        max_drawdown = max(max_drawdown, (peak_equity - equity) / peak_equity * 100)
+
+    if quantity:
+        close_position(len(candles) - 1, candles[-1].close, "end_of_data")
+        equity_curve[-1] = cash
+
+    winners = sum(1 for trade in trades if trade.net_pnl > 0)
+    gross_wins = sum(trade.net_pnl for trade in trades if trade.net_pnl > 0)
+    gross_losses = abs(sum(trade.net_pnl for trade in trades if trade.net_pnl < 0))
     net_profit = cash - config.starting_cash
     average_win = gross_wins / winners if winners else 0.0
     losers = len(trades) - winners
@@ -184,7 +321,7 @@ def run_backtest(
     max_drawdown_value = max_drawdown / 100 * max(equity_curve or [config.starting_cash])
     recovery_factor = net_profit / max_drawdown_value if max_drawdown_value else 0.0
     buy_hold_return_percent = (
-        ((candles[-1].close / candles[0].close) - 1) * 100 if candles and candles[0].close else 0.0
+        ((candles[-1].close / candles[0].close) - 1) * 100 if candles[0].close else 0.0
     )
     buy_hold_equity = config.starting_cash * (1 + buy_hold_return_percent / 100)
     result = BacktestResult(
@@ -196,7 +333,9 @@ def run_backtest(
         trades=len(trades),
         fees=fees_total,
         slippage=slippage_total,
-        exposure_percent=config.position_percent if trades else 0,
+        spread=spread_total,
+        exposure_percent=(invested_bars / len(candles) * 100) if candles else 0.0,
+        max_exposure_percent=max_exposure,
         net_profit=net_profit,
         cagr_percent=cagr_percent,
         sharpe=sharpe,
@@ -207,5 +346,84 @@ def run_backtest(
         recovery_factor=recovery_factor,
         buy_hold_return_percent=buy_hold_return_percent,
         buy_hold_equity=buy_hold_equity,
+        partial_fills=partial_fills,
+        stop_loss_trades=stop_loss_trades,
+        take_profit_trades=take_profit_trades,
+        latency_bars=config.latency_bars,
     )
     return result, trades
+
+
+def run_backtest_splits(
+    candles: list[Candle],
+    config: BacktestConfig | None = None,
+    *,
+    train_ratio: float = 0.6,
+    validation_ratio: float = 0.2,
+) -> list[dict[str, object]]:
+    """Run independent in-sample, validation and out-of-sample partitions."""
+    config = config or BacktestConfig()
+    if (
+        not 0 < train_ratio < 1
+        or not 0 <= validation_ratio < 1
+        or train_ratio + validation_ratio >= 1
+    ):
+        raise ValueError("split ratios must leave a positive out-of-sample segment")
+    if len(candles) <= config.slow_period * 3:
+        return []
+    train_end = max(config.slow_period + 1, int(len(candles) * train_ratio))
+    validation_end = max(
+        train_end + config.slow_period + 1,
+        int(len(candles) * (train_ratio + validation_ratio)),
+    )
+    validation_end = min(validation_end, len(candles) - config.slow_period - 1)
+    segments = (
+        ("in_sample", candles[:train_end]),
+        ("validation", candles[train_end:validation_end]),
+        ("out_of_sample", candles[validation_end:]),
+    )
+    results: list[dict[str, object]] = []
+    for name, segment in segments:
+        if len(segment) <= config.slow_period:
+            continue
+        result, trades = run_backtest(segment, config)
+        results.append(
+            {
+                "name": name,
+                "data_points": len(segment),
+                "data_start": segment[0].open_time,
+                "data_end": segment[-1].open_time,
+                "metrics": result.__dict__,
+                "trades": len(trades),
+                "lookahead": False,
+            }
+        )
+    return results
+
+
+def run_parameter_sweep(
+    candles: list[Candle], config: BacktestConfig | None = None
+) -> list[dict[str, object]]:
+    """Evaluate neighboring EMA hypotheses on the in-sample segment only."""
+    config = config or BacktestConfig()
+    if not candles:
+        return []
+    train_end = max(config.slow_period + 1, int(len(candles) * 0.6))
+    research_candles = candles[: min(train_end, len(candles))]
+    candidates = ((18, 45), (19, 48), (20, 50), (21, 52), (22, 55))
+    results: list[dict[str, object]] = []
+    for fast_period, slow_period in candidates:
+        candidate = BacktestConfig(
+            **{**config.__dict__, "fast_period": fast_period, "slow_period": slow_period}
+        )
+        result, _ = run_backtest(research_candles, candidate)
+        results.append(
+            {
+                "fast_period": fast_period,
+                "slow_period": slow_period,
+                "data_points": len(research_candles),
+                "evaluation_scope": "in_sample",
+                "metrics": result.__dict__,
+            }
+        )
+    return results

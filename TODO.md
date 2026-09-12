@@ -20,10 +20,16 @@
 - [x] PAPER candle-close runner through Strategy → Risk → OrderManager → Broker
 - [x] Persist PAPER signals, intents, orders, events, fills and snapshots
 - [x] Read-only account reconciliation primitives and User Data Stream adapter
+- [x] Separate `api` and `trader` Compose services with shared PostgreSQL snapshots
+- [x] Persisted runtime summaries/events for a stateless API process
+- [x] Binance Spot Testnet broker gate with exchange filters and remote idempotency lookup
+- [x] User Data Stream keepalive, reconnect hard stop and periodic reconciliation on Testnet
+- [x] Explicit in-sample/validation/out-of-sample research splits
+- [x] Stop/take-profit, spread, latency and partial-fill abstractions in the backtest
 
 ## Next implementation gates
 
-- [ ] Add automatic User Data Stream keepalive/reconciliation task and stale-data pause
-- [ ] Add explicit in-sample/validation/out-of-sample and walk-forward backtest splits
-- [ ] Add stop/take-profit, spread, latency and partial-fill abstractions to PAPER
+- [ ] Add true walk-forward parameter selection with untouched out-of-sample scoring
+- [ ] Persist and restore Testnet positions/balances instead of starting from quote-only virtual state
+- [x] Fail-closed market-cycle alert/pause policy for the long-running worker
 - [ ] Run Testnet soak test before any live-candidate review

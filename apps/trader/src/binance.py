@@ -1,4 +1,4 @@
-"""Binance Spot adapters for public market data and optional read-only account data."""
+"""Binance Spot adapters for public market data and guarded account access."""
 
 import asyncio
 import hashlib
@@ -76,7 +76,7 @@ class BinancePublicClient:
 
 
 class BinancePrivateClient(BinancePublicClient):
-    """Signed account reader. It deliberately has no order-writing methods."""
+    """Signed account and low-level Spot order endpoint adapter."""
 
     def __init__(
         self, api_key: str, api_secret: str, base_url: str = "https://api.binance.com"
@@ -109,6 +109,63 @@ class BinancePrivateClient(BinancePublicClient):
         if not isinstance(payload, list):
             raise ValueError("unexpected Binance trades response")
         return [row for row in payload if isinstance(row, dict)]
+
+    def place_spot_limit_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: str,
+        price: str,
+        client_order_id: str,
+    ) -> dict[str, object]:
+        """Submit one LIMIT order; callers must enforce the mode safety gate."""
+        payload = self._signed_request(
+            "POST",
+            "/api/v3/order",
+            {
+                "symbol": symbol.upper(),
+                "side": side.upper(),
+                "type": "LIMIT",
+                "timeInForce": "GTC",
+                "quantity": quantity,
+                "price": price,
+                "newClientOrderId": client_order_id,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise ValueError("unexpected Binance order response")
+        return payload
+
+    def cancel_spot_order(
+        self, *, symbol: str, order_id: str | None = None, client_order_id: str | None = None
+    ) -> dict[str, object]:
+        if not order_id and not client_order_id:
+            raise ValueError("order_id or client_order_id is required")
+        params: dict[str, object] = {"symbol": symbol.upper()}
+        if order_id:
+            params["orderId"] = order_id
+        else:
+            params["origClientOrderId"] = client_order_id
+        payload = self._signed_request("DELETE", "/api/v3/order", params)
+        if not isinstance(payload, dict):
+            raise ValueError("unexpected Binance cancel response")
+        return payload
+
+    def query_spot_order(
+        self, *, symbol: str, order_id: str | None = None, client_order_id: str | None = None
+    ) -> dict[str, object]:
+        if not order_id and not client_order_id:
+            raise ValueError("order_id or client_order_id is required")
+        params: dict[str, object] = {"symbol": symbol.upper()}
+        if order_id:
+            params["orderId"] = order_id
+        else:
+            params["origClientOrderId"] = client_order_id
+        payload = self._signed_request("GET", "/api/v3/order", params)
+        if not isinstance(payload, dict):
+            raise ValueError("unexpected Binance order query response")
+        return payload
 
     def create_user_data_stream(self) -> str:
         payload = self._api_key_request("POST", "/api/v3/userDataStream")
@@ -158,11 +215,13 @@ class BinanceUserDataStream:
     def __init__(self, base_url: str = "wss://stream.binance.com:9443/ws") -> None:
         self.base_url = base_url.rstrip("/")
         self.reconnects = 0
+        self.connected = False
+        self.last_message_at: float | None = None
 
     def stream_url(self, listen_key: str) -> str:
         return f"{self.base_url}/{listen_key}"
 
-    async def iter_events(self, listen_key: str):
+    async def iter_events(self, listen_key: str, on_reconnect=None):
         reconnect_delay = 1.0
         while True:
             try:
@@ -173,15 +232,20 @@ class BinanceUserDataStream:
                     close_timeout=5,
                     max_size=2**20,
                 ) as socket:
+                    self.connected = True
                     reconnect_delay = 1.0
                     async for raw_message in socket:
                         payload = json.loads(raw_message)
                         if isinstance(payload, dict):
+                            self.last_message_at = time.time()
                             yield payload
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self.connected = False
                 self.reconnects += 1
+                if on_reconnect is not None:
+                    await on_reconnect()
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, 30.0)
 

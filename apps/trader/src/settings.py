@@ -28,15 +28,22 @@ class Settings(BaseSettings):
     )
 
     trading_mode: Literal["backtest", "paper", "testnet", "live"] = "paper"
+    application_role: Literal["all", "trader", "api"] = "all"
+    app_port: int = 8000
     live_trading_enabled: bool = False
     binance_api_key: str = ""
     binance_api_secret: SecretStr = SecretStr("")
     binance_testnet: bool = False
+    binance_testnet_api_base_url: str = "https://testnet.binance.vision"
+    binance_testnet_ws_base_url: str = "wss://stream.testnet.binance.vision/stream"
     database_url: str = f"sqlite:///{(PROJECT_ROOT / 'data' / 'algodesk.db').as_posix()}"
     api_port: int = 8000
     binance_api_base_url: str = "https://api.binance.com"
     binance_ws_base_url: str = "wss://stream.binance.com:9443/stream"
     allowed_origins: str = "http://localhost:4173,http://127.0.0.1:4173"
+    alert_webhook_url: str = ""
+    reconciliation_interval_seconds: int = 300
+    trader_internal_url: str = "http://trader:8001"
 
     @property
     def account_configured(self) -> bool:
@@ -47,6 +54,22 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def effective_binance_api_base_url(self) -> str:
+        return (
+            self.binance_testnet_api_base_url
+            if self.trading_mode == "testnet" or self.binance_testnet
+            else self.binance_api_base_url
+        )
+
+    @property
+    def effective_binance_ws_base_url(self) -> str:
+        return (
+            self.binance_testnet_ws_base_url
+            if self.trading_mode == "testnet" or self.binance_testnet
+            else self.binance_ws_base_url
+        )
 
 
 settings = Settings()

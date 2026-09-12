@@ -46,7 +46,11 @@ class AccountReconciler:
             > self.tolerance
         )
         remote_orders = client.open_orders()
-        remote_order_ids = {str(row["orderId"]) for row in remote_orders if "orderId" in row}
+        remote_order_ids = {
+            str(row.get("clientOrderId") or row.get("orderId"))
+            for row in remote_orders
+            if row.get("clientOrderId") is not None or row.get("orderId") is not None
+        }
         missing_local = tuple(sorted(local_open_order_ids - remote_order_ids))
         unknown_remote = tuple(sorted(remote_order_ids - local_open_order_ids))
         status = (

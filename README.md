@@ -43,9 +43,10 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml up -d --
 - O dashboard tenta primeiro o WebSocket público da Binance e mantém REST como fallback; o indicador mostra a origem efetiva (`WebSocket`, `REST` ou indisponível).
 - Equity, PnL, drawdown, posições e activity feed são calculados pelo motor PAPER local a partir de candles fechados reais da Binance, iniciando com capital virtual; não representam saldo, ordens ou histórico da conta Binance. Apenas `BOT-001`/`ema-btc-01` está implantado nesta versão; as outras estações são visuais e aparecem como `NOT DEPLOYED`.
 - `/api/account/summary` faz leitura autenticada somente quando as credenciais existem no servidor; sem elas retorna `not configured` e nunca inventa saldo.
-- O serviço FastAPI expõe saúde, risco, ticker público, status de mercado, WebSocket interno, backtest histórico real e o fixture demonstrativo separado; cotações REST usam `Cache-Control: no-store`.
-- O Compose inclui PostgreSQL com volume bindado em `E:\AlgoDesk\data\postgres`.
-- LIVE, Futures, Margin, leverage, short e withdrawals não são implementados.
+- O serviço `api` expõe saúde, risco, ticker público, status de mercado, WebSocket interno, backtest histórico real e o fixture demonstrativo separado; o worker `trader` executa o ciclo PAPER e persiste snapshots. Cotações REST usam `Cache-Control: no-store`.
+- O Compose inclui PostgreSQL com volume bindado em `E:\AlgoDesk\data\postgres`; `api` lê snapshots persistidos do worker e encaminha o hard stop por rede interna.
+- O adaptador de execução Binance Spot Testnet está implementado, com consulta idempotente por `clientOrderId`, filtros de `exchangeInfo`, reconciliação e User Data Stream. LIVE continua travado por duas chaves (`TRADING_MODE=live` + `LIVE_TRADING_ENABLED=true`) e não deve ser habilitado nesta versão.
+- Futures, Margin, leverage, short e withdrawals não são implementados.
 
 ## Docker local/VPS
 
@@ -56,4 +57,4 @@ Copy-Item .env.example .env
 docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml up -d --build
 ```
 
-Consulte [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md), [TODO.md](TODO.md) e a documentação em `docs/` para as portas restantes antes de qualquer Testnet/LIVE.
+Consulte [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md), [TODO.md](TODO.md) e a documentação em `docs/` antes de configurar credenciais Testnet. Nenhuma chave é necessária para o modo PAPER.

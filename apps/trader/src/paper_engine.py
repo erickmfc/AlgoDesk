@@ -1,8 +1,10 @@
 """Closed-candle PAPER runner that exercises the production order boundary."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .core import (
+    BrokerAdapter,
     OrderManager,
     OrderSide,
     OrderStatus,
@@ -40,12 +42,17 @@ class PaperEngine:
     """Run one strategy through intent, risk, order manager and paper broker."""
 
     def __init__(
-        self, config: PaperEngineConfig | None = None, risk: RiskEngine | None = None
+        self,
+        config: PaperEngineConfig | None = None,
+        risk: RiskEngine | None = None,
+        broker: BrokerAdapter | None = None,
+        before_submit: Callable[[TradeIntent, RiskDecision], None] | None = None,
     ) -> None:
         self.config = config or PaperEngineConfig()
         self.risk = risk or RiskEngine(RiskConfig())
-        self.broker = PaperBroker()
+        self.broker = broker or PaperBroker()
         self.orders = OrderManager(self.broker)
+        self.before_submit = before_submit
         self.strategy = EmaTrendStrategy(self.config.fast_period, self.config.slow_period)
         self.cash = self.config.starting_cash
         self.quantity = 0.0
@@ -94,6 +101,8 @@ class PaperEngine:
             decision = self.risk.evaluate(
                 intent, self.portfolio, market_age_seconds=market_age_seconds
             )
+            if self.before_submit is not None:
+                self.before_submit(intent, decision)
             order = self.orders.submit(intent, decision)
             event = PaperEvent(intent, decision, order)
             self.events.append(event)
@@ -118,6 +127,7 @@ class PaperEngine:
             equity=self.equity,
             open_positions=1 if self.quantity > 0 else 0,
             total_exposure_percent=exposure,
+            daily_loss_percent=max(0.0, -self.realized_pnl / self.config.starting_cash * 100),
             drawdown_percent=drawdown,
             balance_available=self.cash,
         )

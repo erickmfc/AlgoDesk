@@ -113,6 +113,17 @@ class PortfolioSnapshotRecord(Base):
     open_positions: Mapped[int] = mapped_column(Integer, default=0)
     drawdown_percent: Mapped[float] = mapped_column(Float)
     mode: Mapped[str] = mapped_column(String(16), default="paper")
+    source: Mapped[str] = mapped_column(String(64), default="paper-engine-from-binance-klines")
+    allocation_percent: Mapped[float] = mapped_column(Float, default=0)
+    trades: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[float] = mapped_column(Float, default=0)
+    status: Mapped[str] = mapped_column(String(24), default="running")
+    hard_stop: Mapped[int] = mapped_column(Integer, default=0)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_candle_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cycles: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[int] = mapped_column(Integer, default=0)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

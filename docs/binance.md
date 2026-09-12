@@ -2,8 +2,19 @@
 
 The first external integration is Binance Spot market data. `BinancePublicClient` reads `/api/v3/ticker/price` and `BinanceMarketStream` consumes combined `@miniTicker` streams through the internal `/ws/market` endpoint. The stream has a 20-second heartbeat and exponential reconnect backoff up to 30 seconds.
 
-`/api/account/summary` is an optional signed, read-only call to `/api/v3/account`. The adapter also contains read-only open-order/trade reads and the Spot User Data Stream listen-key lifecycle for the reconciliation gate. API keys are read from server-side environment variables, never returned to the dashboard, and no order-writing method exists in this adapter.
+`/api/account/summary` is an optional signed call to `/api/v3/account`. The
+adapter also contains open-order/trade reads, Spot limit-order/cancel/query
+methods and the Spot User Data Stream listen-key lifecycle. The external
+broker is mode-gated: it can target Binance Spot Testnet only in
+`TRADING_MODE=testnet`, and LIVE additionally requires
+`LIVE_TRADING_ENABLED=true`. API keys are read from server-side environment
+variables and never returned to the dashboard.
 
-The adapter must use official REST and WebSocket interfaces, read current `exchangeInfo` filters at runtime, back off on rate limits, reconnect user streams, and reconcile after reconnects. The latter two account-stream gates remain a prerequisite for Testnet/LIVE.
+The adapter uses official REST and WebSocket interfaces, reads current
+`exchangeInfo` filters before external orders, queries `clientOrderId` before
+submission, never retries an ambiguous request, reconnects user streams,
+keeps the listen key alive and reconciles after reconnects and on a periodic
+Testnet schedule. A divergence pauses the worker and requires reconciliation;
+the Testnet soak remains a prerequisite for any live-candidate review.
 
 No secret belongs in the frontend, Git or logs. The intended key permissions are read and Spot Trading only, with withdrawals, Futures and Margin disabled. `LIVE_TRADING_ENABLED=false` remains a second application-level lock.

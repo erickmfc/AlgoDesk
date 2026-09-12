@@ -20,7 +20,9 @@ type BacktestMetrics = {
   trades: number
   fees: number
   slippage: number
+  spread: number
   exposure_percent: number
+  max_exposure_percent: number
   sharpe: number
   sortino: number
   average_win: number
@@ -28,11 +30,29 @@ type BacktestMetrics = {
   expectancy: number
   recovery_factor: number
   buy_hold_return_percent: number
+  partial_fills: number
+  stop_loss_trades: number
+  take_profit_trades: number
+  latency_bars: number
 }
 type BacktestMeta = {
   data_points: number
   data_start: string
   data_end: string
+  lookahead: boolean
+  frictions?: {
+    fee_bps: number
+    slippage_bps: number
+    spread_bps: number
+    latency_bars: number
+    partial_fill_ratio: number
+    filters_from_exchange_info: boolean
+  }
+}
+type BacktestSplit = {
+  name: string
+  data_points: number
+  metrics: { return_percent: number; max_drawdown_percent: number; trades: number }
   lookahead: boolean
 }
 type PaperSummary = {
@@ -75,6 +95,7 @@ type PaperActivity = {
   tone: Tone
   text: string
 }
+type EquityPoint = { captured_at: string; equity: number }
 
 type DeskBot = {
   id: string
@@ -193,15 +214,26 @@ function DeskStation({ bot, index, onSelect, selected }: { bot: DeskBot; index: 
   )
 }
 
-function Sparkline() {
-  return <svg className="sparkline" viewBox="0 0 180 44" preserveAspectRatio="none" aria-label="Equity sparkline"><path d="M0 30 C10 25 15 33 25 27 S40 12 50 25 S66 36 75 20 S92 26 100 17 S118 20 128 9 S146 26 155 16 S167 14 180 4" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M0 30 C10 25 15 33 25 27 S40 12 50 25 S66 36 75 20 S92 26 100 17 S118 20 128 9 S146 26 155 16 S167 14 180 4 L180 44 L0 44Z" fill="currentColor" opacity=".08" /></svg>
+function Sparkline({ values, label = 'Telemetry sparkline' }: { values?: number[]; label?: string }) {
+  const cleanValues = values?.filter((value) => Number.isFinite(value)) ?? []
+  const minimum = cleanValues.length ? Math.min(...cleanValues) : 0
+  const maximum = cleanValues.length ? Math.max(...cleanValues) : 0
+  const spread = maximum - minimum || 1
+  const coordinates = cleanValues.map((value, index) => {
+    const x = cleanValues.length > 1 ? index / (cleanValues.length - 1) * 180 : 90
+    const y = 38 - ((value - minimum) / spread * 30)
+    return `${x.toFixed(2)} ${y.toFixed(2)}`
+  })
+  const path = coordinates.length > 1 ? `M${coordinates.join(' L')}` : 'M0 30 L180 30'
+  const areaPath = coordinates.length > 1 ? `${path} L180 44 L0 44Z` : 'M0 30 L180 30 L180 44 L0 44Z'
+  return <svg className="sparkline" viewBox="0 0 180 44" preserveAspectRatio="none" aria-label={label}><path d={path} fill="none" stroke="currentColor" strokeWidth="2" /><path d={areaPath} fill="currentColor" opacity=".08" /></svg>
 }
 
 function StatCard({ label, value, detail, tone = 'cyan', icon: Icon }: { label: string; value: string; detail: string; tone?: Tone; icon: typeof Activity }) {
   return <div className={`stat-card ${toneClass(tone)}`}><div className="stat-header"><span>{label}</span><Icon size={16} /></div><strong>{value}</strong><small>{detail}</small></div>
 }
 
-function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMeta, backtestState, paperSummary, systemMetrics, riskConfig }: { page: string; bots: DeskBot[]; botsOnline: number; onSelect: (bot: DeskBot) => void; backtest: BacktestMetrics | null; backtestMeta: BacktestMeta | null; backtestState: 'loading' | 'ready' | 'error'; paperSummary: PaperSummary | null; systemMetrics: SystemMetrics | null; riskConfig: RiskConfig | null }) {
+function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMeta, backtestState, backtestSplits, parameterSweepCount, paperSummary, systemMetrics, riskConfig, equityPoints }: { page: string; bots: DeskBot[]; botsOnline: number; onSelect: (bot: DeskBot) => void; backtest: BacktestMetrics | null; backtestMeta: BacktestMeta | null; backtestState: 'loading' | 'ready' | 'error'; backtestSplits: BacktestSplit[]; parameterSweepCount: number; paperSummary: PaperSummary | null; systemMetrics: SystemMetrics | null; riskConfig: RiskConfig | null; equityPoints: EquityPoint[] }) {
   const title = navItems.find((item) => item.id === page)?.label ?? 'Operations'
   const paperRunning = paperSummary?.status === 'running'
   const drawdown = Math.abs(paperSummary?.drawdown_percent ?? 0)
@@ -215,13 +247,14 @@ function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMet
       {page === 'bots' && bots.map((bot) => <button className="workspace-row" key={bot.id} onClick={() => onSelect(bot)}><BotAvatar status={bot.status} tone={bot.tone} /><div><strong>{bot.id}</strong><span>{bot.symbol} · {bot.strategy}</span></div><span className={`status-chip ${toneClass(bot.tone)}`}>{bot.status}</span><b>{bot.pnl}</b><ChevronRight size={16} /></button>)}
       {page === 'backtests' && <>
         <div className="detail-panel"><div className="panel-heading"><span>Binance historical backtest</span><StatusMark tone={backtestState === 'error' ? 'amber' : 'violet'} pulse={backtestState === 'loading'} /></div><h3>{backtest ? `${backtest.return_percent >= 0 ? '+' : ''}${backtest.return_percent.toFixed(2)}% return` : backtestState === 'error' ? 'Research data unavailable' : 'Loading Binance history'}</h3><p>{backtestMeta ? `${backtestMeta.data_points} closed BTCUSDT candles · ${backtestMeta.data_start.slice(0, 10)} → ${backtestMeta.data_end.slice(0, 10)}` : backtestState === 'error' ? 'A Binance historical request failed; no synthetic result is shown.' : 'Fetching closed candles from Binance Spot.'}</p><div className="progress-track"><span style={{ width: `${Math.min(100, Math.max(0, backtest?.win_rate_percent ?? 0))}%` }} /></div><small>{backtest ? `${backtest.trades} completed trade · ${backtest.win_rate_percent.toFixed(0)}% win rate` : backtestState === 'error' ? 'Waiting for a healthy market-data response' : 'Waiting for API'}</small></div>
-        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Research metrics</span><span className="positive">{backtest ? `$${backtest.equity.toFixed(2)}` : '—'}</span></div><div className="metric-list"><span>Max drawdown <b>{backtest ? `${backtest.max_drawdown_percent.toFixed(2)}%` : '—'}</b></span><span>Profit factor <b>{backtest ? backtest.profit_factor === null ? '—' : backtest.profit_factor.toFixed(2) : '—'}</b></span><span>Exposure <b>{backtest ? `${backtest.exposure_percent.toFixed(1)}%` : '—'}</b></span></div></div>
-        <div className="detail-panel"><div className="panel-heading"><span>Trading frictions</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="amber" /><span>Fees</span><b>{backtest ? `$${backtest.fees.toFixed(2)}` : '—'}</b></div><div className="guardrail"><StatusMark tone="amber" /><span>Slippage</span><b>{backtest ? `$${backtest.slippage.toFixed(2)}` : '—'}</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Lookahead</span><b>OFF</b></div></div>
+        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Research metrics</span><span className="positive">{backtest ? `$${backtest.equity.toFixed(2)}` : '—'}</span></div><div className="metric-list"><span>Max drawdown <b>{backtest ? `${backtest.max_drawdown_percent.toFixed(2)}%` : '—'}</b></span><span>Profit factor <b>{backtest ? backtest.profit_factor === null ? '—' : backtest.profit_factor.toFixed(2) : '—'}</b></span><span>Exposure time <b>{backtest ? `${backtest.exposure_percent.toFixed(1)}%` : '—'}</b></span><span>Max exposure <b>{backtest ? `${backtest.max_exposure_percent.toFixed(1)}%` : '—'}</b></span></div></div>
+        <div className="detail-panel"><div className="panel-heading"><span>Trading frictions</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="amber" /><span>Fees</span><b>{backtest ? `$${backtest.fees.toFixed(2)}` : '—'}</b></div><div className="guardrail"><StatusMark tone="amber" /><span>Slippage / spread</span><b>{backtest ? `$${(backtest.slippage + backtest.spread).toFixed(2)}` : '—'}</b></div><div className="guardrail"><StatusMark tone="violet" /><span>Latency / partial fills</span><b>{backtest ? `${backtest.latency_bars} bar · ${backtest.partial_fills}` : '—'}</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Lookahead</span><b>OFF</b></div></div>
         <div className="detail-panel"><div className="panel-heading"><span>Performance</span><span className="positive">{backtest ? `${backtest.cagr_percent.toFixed(2)}% CAGR` : '—'}</span></div><div className="metric-list"><span>Sharpe <b>{backtest ? backtest.sharpe.toFixed(2) : '—'}</b></span><span>Sortino <b>{backtest ? backtest.sortino.toFixed(2) : '—'}</b></span><span>Buy &amp; hold <b>{backtest ? `${backtest.buy_hold_return_percent.toFixed(2)}%` : '—'}</b></span></div></div>
+        <div className="detail-panel split-panel"><div className="panel-heading"><span>Validation splits</span><span>{backtestSplits.length}/3</span></div>{backtestSplits.length ? backtestSplits.map((split) => <div className="guardrail" key={split.name}><StatusMark tone={split.name === 'out_of_sample' ? 'amber' : 'cyan'} /><span>{split.name.replaceAll('_', ' ')}</span><b>{split.metrics.return_percent.toFixed(2)}% · {split.metrics.trades} trades</b></div>) : <p>Waiting for independent in-sample, validation and out-of-sample results.</p>}<small>Neighbor EMA sweep: {parameterSweepCount || '—'} variants · no OOS tuning</small></div>
       </>}
       {page !== 'bots' && page !== 'backtests' && <>
         <div className="detail-panel"><div className="panel-heading"><span>System overview</span><StatusMark tone={dataHealthy ? 'cyan' : 'amber'} pulse={dataHealthy} /></div><h3>{title === 'Risk' ? (paperRunning ? 'Risk Engine armed' : 'Risk telemetry waiting') : title === 'System' ? (systemMetrics?.database_connected ? 'System healthy' : 'System unavailable') : title === 'Trades' ? `${paperSummary?.trades_24h ?? 0} closed paper trades` : `${title} is ready`}</h3><p>{title === 'Risk' ? 'Risk is evaluated before each paper intent; no live order path is enabled.' : title === 'System' ? 'Runtime health comes from the FastAPI readiness and metrics endpoints.' : title === 'Trades' ? 'The list is backed by the paper engine events generated from closed Binance candles.' : 'Public Binance market data is live; account data remains read-only and optional.'}</p><div className="progress-track"><span style={{ width: `${title === 'Risk' ? riskBudgetUsed : dataHealthy ? 100 : 0}%` }} /></div><small>{title === 'Risk' ? `${drawdown.toFixed(2)}% drawdown used · limit ${drawdownLimit.toFixed(2)}%` : title === 'System' ? `${systemMetrics?.websocket_connections ?? 0} market stream connection(s) · ${systemMetrics?.websocket_reconnects ?? 0} reconnect(s)` : `${botsOnline}/5 visual stations backed by a deployed paper engine`}</small></div>
-        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Equity telemetry</span><span className={paperSummary && paperSummary.daily_pnl >= 0 ? 'positive' : 'negative'}>{paperSummary ? formatSignedUsd(paperSummary.daily_pnl) : '—'}</span></div><Sparkline /><div className="chart-axis"><span>Paper start</span><span>{paperSummary?.last_candle_at ? new Date(paperSummary.last_candle_at).toLocaleDateString('pt-BR') : '—'}</span><span>{paperSummary?.last_run_at ? new Date(paperSummary.last_run_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</span></div></div>
+        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Equity telemetry</span><span className={paperSummary && paperSummary.daily_pnl >= 0 ? 'positive' : 'negative'}>{paperSummary ? formatSignedUsd(paperSummary.daily_pnl) : '—'}</span></div><Sparkline values={equityPoints.map((point) => point.equity)} label="Persisted paper equity" /><div className="chart-axis"><span>Paper start</span><span>{paperSummary?.last_candle_at ? new Date(paperSummary.last_candle_at).toLocaleDateString('pt-BR') : '—'}</span><span>{paperSummary?.last_run_at ? new Date(paperSummary.last_run_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</span></div></div>
         <div className="detail-panel"><div className="panel-heading"><span>Guardrails</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="cyan" /><span>Live trading locked</span><b>ON</b></div><div className="guardrail"><StatusMark tone={paperRunning ? 'amber' : 'red'} /><span>Paper mode</span><b>{paperRunning ? 'ACTIVE' : 'WAITING'}</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Spot only</span><b>ON</b></div></div>
       </>}
     </div>
@@ -241,17 +274,30 @@ function App() {
   const [accountStatus, setAccountStatus] = useState<AccountStatus>('loading')
   const [backtestMetrics, setBacktestMetrics] = useState<BacktestMetrics | null>(null)
   const [backtestMeta, setBacktestMeta] = useState<BacktestMeta | null>(null)
+  const [backtestSplits, setBacktestSplits] = useState<BacktestSplit[]>([])
+  const [parameterSweepCount, setParameterSweepCount] = useState(0)
   const [backtestState, setBacktestState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [paperSummary, setPaperSummary] = useState<PaperSummary | null>(null)
   const [paperActivities, setPaperActivities] = useState<PaperActivity[]>([])
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null)
   const [riskConfig, setRiskConfig] = useState<RiskConfig | null>(null)
+  const [equityPoints, setEquityPoints] = useState<EquityPoint[]>([])
 
   useEffect(() => { const timer = window.setInterval(() => setClock(new Date()), 1000); return () => window.clearInterval(timer) }, [])
   useEffect(() => {
     const onPopState = () => setActivePage(pageForPath(window.location.pathname))
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const loadEquity = () => fetch(`${apiUrl}/api/paper/equity?limit=60`, { cache: 'no-store' })
+      .then(async (response) => response.ok ? await response.json() as { points?: EquityPoint[] } : Promise.reject(new Error('equity request failed')))
+      .then((payload) => setEquityPoints((payload.points ?? []).filter((point) => Number.isFinite(point.equity))))
+      .catch(() => setEquityPoints([]))
+    void loadEquity()
+    const timer = window.setInterval(loadEquity, 15000)
+    return () => window.clearInterval(timer)
   }, [])
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 3600); return () => window.clearTimeout(timer) }, [notice])
   useEffect(() => {
@@ -301,13 +347,15 @@ function App() {
   useEffect(() => {
     const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
     fetch(`${apiUrl}/api/backtests/binance?symbol=BTCUSDT&interval=1h&limit=500`, { cache: 'no-store' })
-      .then(async (response) => response.ok ? await response.json() as { metrics?: BacktestMetrics; data_points?: number; data_start?: string; data_end?: string; lookahead?: boolean } : Promise.reject(new Error('backtest request failed')))
+      .then(async (response) => response.ok ? await response.json() as { metrics?: BacktestMetrics; data_points?: number; data_start?: string; data_end?: string; lookahead?: boolean; frictions?: BacktestMeta['frictions']; splits?: BacktestSplit[]; parameter_sweep?: unknown[] } : Promise.reject(new Error('backtest request failed')))
       .then((payload) => {
         setBacktestMetrics(payload.metrics ?? null)
-        setBacktestMeta(payload.data_points && payload.data_start && payload.data_end ? { data_points: payload.data_points, data_start: payload.data_start, data_end: payload.data_end, lookahead: payload.lookahead ?? false } : null)
+        setBacktestMeta(payload.data_points && payload.data_start && payload.data_end ? { data_points: payload.data_points, data_start: payload.data_start, data_end: payload.data_end, lookahead: payload.lookahead ?? false, frictions: payload.frictions } : null)
+        setBacktestSplits(payload.splits ?? [])
+        setParameterSweepCount(payload.parameter_sweep?.length ?? 0)
         setBacktestState(payload.metrics ? 'ready' : 'error')
       })
-      .catch(() => { setBacktestMetrics(null); setBacktestMeta(null); setBacktestState('error') })
+      .catch(() => { setBacktestMetrics(null); setBacktestMeta(null); setBacktestSplits([]); setParameterSweepCount(0); setBacktestState('error') })
   }, [])
   useEffect(() => {
     const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -393,7 +441,7 @@ function App() {
         <div className="page-heading"><div><p className="section-kicker">TRADING CONTROL ROOM · BINANCE SPOT · PUBLIC TICKER</p><h1>{activePage === 'operations' ? 'Operations Desk' : navItems.find((item) => item.id === activePage)?.label}</h1><p className="heading-sub">{activePage === 'operations' ? 'One deployed paper engine. Five transparent visual stations.' : 'Observe, validate and keep every decision inside the guardrails.'}</p></div><div className="heading-controls"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a bot..." aria-label="Buscar bot" /></div><div className="mode-select"><span className="mode-dot" />PAPER · LIVE LOCKED<ChevronRight size={14} /></div></div></div>
         <div className="stats-row"><StatCard label="Paper equity · real market" value={paperSummary ? `$ ${paperSummary.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'} detail={paperSummary?.status === 'running' ? 'Engine · Binance closed candles' : 'Engine warming up'} icon={WalletCards} /><StatCard label="Paper realized PnL" value={formatSignedUsd(paperSummary?.daily_pnl)} detail={paperSummary?.status === 'running' ? 'Since paper session start' : 'Awaiting paper engine'} tone="cyan" icon={CircleDollarSign} /><StatCard label="Paper drawdown" value={paperSummary ? `${paperSummary.drawdown_percent.toFixed(2)}%` : '—'} detail={`Risk limit · ${(riskConfig?.hard_drawdown_limit_percent ?? 5).toFixed(2)}%`} tone="red" icon={Gauge} /><StatCard label="Bots online · local" value={`${botsOnline} / ${bots.length}`} detail="Only deployed engines count as online" tone="amber" icon={Bot} /><button className={`stop-button ${hardStopped ? 'is-stopped' : ''}`} onClick={hardStopped ? () => setHardStopped(false) : stopAll}><Square size={17} fill="currentColor" />{hardStopped ? 'HARD STOP ACTIVE' : 'PARAR TODOS OS ROBÔS'}</button></div>
 
-      <PageWorkspace page={activePage} bots={bots} botsOnline={botsOnline} onSelect={selectBot} backtest={backtestMetrics} backtestMeta={backtestMeta} backtestState={backtestState} paperSummary={paperSummary} systemMetrics={systemMetrics} riskConfig={riskConfig} />
+      <PageWorkspace page={activePage} bots={bots} botsOnline={botsOnline} onSelect={selectBot} backtest={backtestMetrics} backtestMeta={backtestMeta} backtestState={backtestState} backtestSplits={backtestSplits} parameterSweepCount={parameterSweepCount} paperSummary={paperSummary} systemMetrics={systemMetrics} riskConfig={riskConfig} equityPoints={equityPoints} />
         {activePage === 'operations' && <div className="operations-grid">
           <section className="desk-panel"><div className="desk-panel-header"><div><span className="panel-eyebrow"><Radio size={13} /> PAPER SIMULATION</span><h2>Trading floor</h2></div><div className="desk-legend"><span><i className="legend-dot cyan" />Open</span><span><i className="legend-dot violet" />Scanning</span><span><i className="legend-dot amber" />Waiting</span><span><i className="legend-dot red" />Halted</span></div></div>
             <div className="trading-floor"><div className="floor-back-wall"><div className="wall-screen screen-map"><span>MARKET GRID</span><div className="world-dots" /></div><div className="wall-screen screen-chart"><span>BTC / ETH · BINANCE PUBLIC</span><div className="market-values"><b>₿ {livePrices.BTCUSDT ? `$${livePrices.BTCUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}</b><b>Ξ {livePrices.ETHUSDT ? `$${livePrices.ETHUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}</b></div><small className="market-source">{feedStatus === 'websocket' ? 'LIVE WEBSOCKET TICKER' : feedStatus === 'rest' ? 'LIVE REST TICKER' : 'NO LIVE MARKET FEED'}</small><Sparkline /></div><div className="wall-copy">DISCIPLINE<br /><em>BEATS</em><br />EMOTION</div></div><div className="floor-grid" /><div className="floor-light light-one" /><div className="floor-light light-two" />{visibleBots.map((bot, index) => <DeskStation bot={bot} index={index} key={bot.id} onSelect={() => selectBot(bot)} selected={selectedBot?.id === bot.id} />)}<div className="floor-label">ALGODESK <span>///</span> PAPER CONTROL FLOOR</div></div>

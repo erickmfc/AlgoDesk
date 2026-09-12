@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .binance import BinancePublicClient
-from .database import save_candles, save_paper_events, save_paper_snapshot
+from .database import reserve_trade_intent, save_candles, save_paper_events, save_paper_snapshot
+from .monitoring import emit_alert
 from .paper_engine import PaperEngine, PaperEngineConfig
 from .strategies import Candle
 
@@ -21,12 +22,16 @@ class PaperRuntime:
     poll_seconds: int = 60
 
     def __post_init__(self) -> None:
-        self.engine = PaperEngine(PaperEngineConfig(symbol=self.symbol))
+        self.engine = PaperEngine(
+            PaperEngineConfig(symbol=self.symbol),
+            before_submit=lambda intent, _decision: reserve_trade_intent(intent, "paper"),
+        )
         self.state = "starting"
         self.last_run_at: datetime | None = None
         self.last_candle_at: datetime | None = None
         self.last_error: str | None = None
         self.cycles = 0
+        self.error_count = 0
 
     async def run_once(self) -> dict[str, object]:
         candles = await asyncio.to_thread(
@@ -41,18 +46,27 @@ class PaperRuntime:
         events = self.engine.process_closed_candles(closed)
         saved_events = await asyncio.to_thread(save_paper_events, events)
         snapshot = self.engine.snapshot()
+        self.state = "running"
+        self.last_error = None
+        self.last_run_at = datetime.now(timezone.utc)
+        self.last_candle_at = datetime.fromtimestamp(closed[-1].open_time / 1000, tz=timezone.utc)
+        self.cycles += 1
         await asyncio.to_thread(
             save_paper_snapshot,
             equity=float(snapshot["equity"]),
             daily_pnl=float(snapshot["realized_pnl"]),
             drawdown_percent=float(snapshot["drawdown_percent"]),
             open_positions=int(snapshot["open_positions"]),
+            allocation_percent=float(snapshot["allocation_percent"]),
+            trades=int(snapshot["trades"]),
+            win_rate=float(snapshot["win_rate"]),
+            status=self.state,
+            hard_stop=self.engine.risk.hard_stop,
+            last_run_at=self.last_run_at,
+            last_candle_at=self.last_candle_at,
+            cycles=self.cycles,
+            errors=self.error_count,
         )
-        self.state = "running"
-        self.last_error = None
-        self.last_run_at = datetime.now(timezone.utc)
-        self.last_candle_at = datetime.fromtimestamp(closed[-1].open_time / 1000, tz=timezone.utc)
-        self.cycles += 1
         return {"saved_candles": saved_candles, "events": len(events), "saved_events": saved_events}
 
     async def loop(self) -> None:
@@ -62,8 +76,17 @@ class PaperRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - keep the paper loop alive and expose state
-                self.state = "error"
+                self.state = "trading_paused"
                 self.last_error = str(exc)
+                self.error_count += 1
+                self.engine.risk.hard_stop = True
+                self._persist_snapshot()
+                emit_alert(
+                    "paper cycle failed",
+                    symbol=self.symbol,
+                    event="paper_cycle_error",
+                    error=str(exc),
+                )
                 logger.exception(
                     "paper cycle failed",
                     extra={"symbol": self.symbol, "event": "paper_cycle_error"},
@@ -92,12 +115,35 @@ class PaperRuntime:
             "last_error": self.last_error,
             "cycles": self.cycles,
             "hard_stop": self.engine.risk.hard_stop,
+            "errors": self.error_count,
         }
 
     def set_hard_stop(self, enabled: bool) -> None:
         self.engine.risk.hard_stop = enabled
         if enabled:
             self.engine.orders.cancel_pending()
+        self._persist_snapshot()
+
+    def _persist_snapshot(self) -> None:
+        snapshot = self.engine.snapshot()
+        try:
+            save_paper_snapshot(
+                equity=float(snapshot["equity"]),
+                daily_pnl=float(snapshot["realized_pnl"]),
+                drawdown_percent=float(snapshot["drawdown_percent"]),
+                open_positions=int(snapshot["open_positions"]),
+                allocation_percent=float(snapshot["allocation_percent"]),
+                trades=int(snapshot["trades"]),
+                win_rate=float(snapshot["win_rate"]),
+                status=self.state,
+                hard_stop=self.engine.risk.hard_stop,
+                last_run_at=self.last_run_at,
+                last_candle_at=self.last_candle_at,
+                cycles=self.cycles,
+                errors=self.error_count,
+            )
+        except Exception as exc:  # noqa: BLE001 - risk state remains active if storage is stale
+            logger.warning("runtime snapshot persistence failed: %s", exc)
 
     def _closed_candles(self, candles: list[Candle]) -> list[Candle]:
         interval_ms = 60 * 60 * 1000

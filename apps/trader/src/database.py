@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from .core import TradeIntent
 from .models import (
     AccountBalanceRecord,
     Base,
@@ -99,7 +100,23 @@ def save_candles(
 
 
 def save_paper_snapshot(
-    *, equity: float, daily_pnl: float, drawdown_percent: float, open_positions: int
+    *,
+    equity: float,
+    daily_pnl: float,
+    drawdown_percent: float,
+    open_positions: int,
+    mode: str = "paper",
+    source: str = "paper-engine-from-binance-klines",
+    allocation_percent: float = 0.0,
+    trades: int = 0,
+    win_rate: float = 0.0,
+    status: str = "running",
+    hard_stop: bool = False,
+    last_run_at: datetime | None = None,
+    last_candle_at: datetime | None = None,
+    last_error: str | None = None,
+    cycles: int = 0,
+    errors: int = 0,
 ) -> None:
     with SessionLocal() as session:
         session.add(
@@ -108,14 +125,25 @@ def save_paper_snapshot(
                 daily_pnl=daily_pnl,
                 open_positions=open_positions,
                 drawdown_percent=drawdown_percent,
-                mode="paper",
+                mode=mode,
+                source=source,
+                allocation_percent=allocation_percent,
+                trades=trades,
+                win_rate=win_rate,
+                status=status,
+                hard_stop=int(hard_stop),
+                last_run_at=last_run_at,
+                last_candle_at=last_candle_at,
+                last_error=last_error,
+                cycles=cycles,
+                errors=errors,
                 captured_at=datetime.now(timezone.utc),
             )
         )
         session.commit()
 
 
-def save_paper_events(events: Iterable[PaperEvent]) -> int:
+def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
     """Persist paper signals, intents, orders and fills idempotently."""
     if not events:
         return 0
@@ -124,39 +152,45 @@ def save_paper_events(events: Iterable[PaperEvent]) -> int:
         for event in events:
             intent = event.intent
             order = event.order
-            client_key = intent.idempotency_key
-            order_id = f"PAPER-{client_key}"
+            client_key = f"{mode.upper()}-{intent.idempotency_key}"
+            order_id = client_key
             if session.get(OrderRecord, order_id) is not None:
                 continue
             created_at = order.created_at
-            session.add(
-                SignalRecord(
-                    signal_id=client_key,
-                    strategy_id=intent.strategy_id,
-                    strategy_version=intent.strategy_version,
-                    symbol=intent.symbol,
-                    action=intent.side.value,
-                    price=intent.price,
-                    candle_timestamp=intent.candle_timestamp,
-                    reason=event.decision.reason,
-                    created_at=created_at,
+            if session.get(SignalRecord, client_key) is None:
+                session.add(
+                    SignalRecord(
+                        signal_id=client_key,
+                        strategy_id=intent.strategy_id,
+                        strategy_version=intent.strategy_version,
+                        symbol=intent.symbol,
+                        action=intent.side.value,
+                        price=intent.price,
+                        candle_timestamp=intent.candle_timestamp,
+                        reason=event.decision.reason,
+                        created_at=created_at,
+                    )
                 )
-            )
-            session.add(
-                TradeIntentRecord(
-                    client_key=client_key,
-                    strategy_id=intent.strategy_id,
-                    symbol=intent.symbol,
-                    side=intent.side.value,
-                    quantity=intent.quantity,
-                    price=intent.price,
-                    candle_timestamp=intent.candle_timestamp,
-                    strategy_version=intent.strategy_version,
-                    reason=event.decision.reason,
-                    status=order.status.value,
-                    created_at=created_at,
+            existing_intent = session.get(TradeIntentRecord, client_key)
+            if existing_intent is None:
+                session.add(
+                    TradeIntentRecord(
+                        client_key=client_key,
+                        strategy_id=intent.strategy_id,
+                        symbol=intent.symbol,
+                        side=intent.side.value,
+                        quantity=intent.quantity,
+                        price=intent.price,
+                        candle_timestamp=intent.candle_timestamp,
+                        strategy_version=intent.strategy_version,
+                        reason=event.decision.reason,
+                        status=order.status.value,
+                        created_at=created_at,
+                    )
                 )
-            )
+            else:
+                existing_intent.reason = event.decision.reason
+                existing_intent.status = order.status.value
             session.add(
                 OrderRecord(
                     order_id=order_id,
@@ -164,7 +198,7 @@ def save_paper_events(events: Iterable[PaperEvent]) -> int:
                     symbol=intent.symbol,
                     side=intent.side.value,
                     status=order.status.value,
-                    raw_response='{"broker":"paper"}',
+                    raw_response=f'{{"broker":"{mode}"}}',
                     updated_at=created_at,
                 )
             )
@@ -190,6 +224,29 @@ def save_paper_events(events: Iterable[PaperEvent]) -> int:
         if inserted:
             session.commit()
         return inserted
+
+
+def reserve_trade_intent(intent: TradeIntent, mode: str = "paper") -> None:
+    """Durably reserve an intent before an external broker call."""
+    client_key = f"{mode.upper()}-{intent.idempotency_key}"
+    with SessionLocal() as session:
+        if session.get(TradeIntentRecord, client_key) is None:
+            session.add(
+                TradeIntentRecord(
+                    client_key=client_key,
+                    strategy_id=intent.strategy_id,
+                    symbol=intent.symbol,
+                    side=intent.side.value,
+                    quantity=intent.quantity,
+                    price=intent.price,
+                    candle_timestamp=intent.candle_timestamp,
+                    strategy_version=intent.strategy_version,
+                    reason="intent reserved before broker submission",
+                    status="CREATED",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
 
 
 def save_account_balances(balances: list[dict[str, float | str]]) -> int:
@@ -236,3 +293,96 @@ def local_open_order_ids() -> set[str]:
             )
         ).all()
         return set(rows)
+
+
+def latest_runtime_summary(mode: str = "paper") -> dict[str, object] | None:
+    """Read the last worker snapshot so the API process stays stateless."""
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(PortfolioSnapshotRecord)
+            .where(PortfolioSnapshotRecord.mode == mode)
+            .order_by(PortfolioSnapshotRecord.captured_at.desc())
+        )
+        if row is None:
+            return None
+        return {
+            "source": row.source,
+            "mode": row.mode,
+            "status": row.status,
+            "symbol": "BTCUSDT",
+            "interval": "1h",
+            "equity": float(row.equity),
+            "daily_pnl": float(row.daily_pnl),
+            "drawdown_percent": -abs(float(row.drawdown_percent)),
+            "open_positions": int(row.open_positions),
+            "allocation_percent": float(row.allocation_percent),
+            "realized_pnl_24h": float(row.daily_pnl),
+            "win_rate_24h": float(row.win_rate),
+            "trades_24h": int(row.trades),
+            "bot_count": 1,
+            "last_run_at": row.last_run_at.isoformat() if row.last_run_at else None,
+            "last_candle_at": row.last_candle_at.isoformat() if row.last_candle_at else None,
+            "last_error": row.last_error,
+            "cycles": int(row.cycles),
+            "hard_stop": bool(row.hard_stop),
+            "errors": int(row.errors),
+        }
+
+
+def recent_paper_events(mode: str = "paper", limit: int = 20) -> list[dict[str, object]]:
+    """Read persisted order decisions for the API-only process."""
+    prefix = f"{mode.upper()}-"
+    with SessionLocal() as session:
+        orders = session.scalars(
+            select(OrderRecord)
+            .where(OrderRecord.order_id.like(f"{prefix}%"))
+            .order_by(OrderRecord.updated_at.desc())
+            .limit(limit)
+        ).all()
+        result: list[dict[str, object]] = []
+        for order in orders:
+            intent = session.get(TradeIntentRecord, order.order_id)
+            if intent is None and order.order_id.startswith(prefix):
+                # Orders created before the mode prefix was introduced used
+                # the raw idempotency hash as their intent key.
+                intent = session.get(TradeIntentRecord, order.order_id.removeprefix(prefix))
+            event = session.scalar(
+                select(OrderEventRecord)
+                .where(OrderEventRecord.order_id == order.order_id)
+                .order_by(OrderEventRecord.created_at.desc())
+            )
+            if event is None and order.order_id.startswith(prefix):
+                event = session.scalar(
+                    select(OrderEventRecord)
+                    .where(OrderEventRecord.order_id == order.order_id.removeprefix(prefix))
+                    .order_by(OrderEventRecord.created_at.desc())
+                )
+            if intent is None:
+                continue
+            result.append(
+                {
+                    "created_at": order.updated_at,
+                    "bot": intent.strategy_id,
+                    "label": order.status,
+                    "symbol": intent.symbol,
+                    "side": intent.side,
+                    "price": float(intent.price),
+                    "reason": event.details if event else intent.reason or "",
+                }
+            )
+        return result
+
+
+def recent_runtime_equity(mode: str = "paper", limit: int = 60) -> list[dict[str, object]]:
+    """Return the persisted equity history in chronological order."""
+    bounded_limit = min(max(limit, 1), 500)
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(PortfolioSnapshotRecord)
+            .where(PortfolioSnapshotRecord.mode == mode)
+            .order_by(PortfolioSnapshotRecord.captured_at.desc())
+            .limit(bounded_limit)
+        ).all()
+        return [
+            {"captured_at": row.captured_at, "equity": float(row.equity)} for row in reversed(rows)
+        ]

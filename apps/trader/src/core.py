@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
+from typing import Protocol
 
 
 class OrderSide(StrEnum):
@@ -99,7 +100,7 @@ class RiskEngine:
         ]
         if self.hard_stop:
             return RiskDecision(False, "hard kill switch active", tuple(checks))
-        if self.soft_stop:
+        if self.soft_stop and intent.side is OrderSide.BUY:
             return RiskDecision(False, "soft kill switch active", tuple(checks))
         if intent.quantity <= 0 or intent.price <= 0:
             return RiskDecision(False, "quantity and price must be positive", tuple(checks))
@@ -136,6 +137,12 @@ class PaperOrder:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     filled_quantity: float = 0.0
     fee: float = 0.0
+
+
+class BrokerAdapter(Protocol):
+    def submit(self, intent: TradeIntent, decision: RiskDecision) -> PaperOrder: ...
+
+    def cancel_pending(self) -> int: ...
 
 
 class PaperBroker:
@@ -179,7 +186,7 @@ class PaperBroker:
 class OrderManager:
     """Central execution boundary between RiskEngine and a broker adapter."""
 
-    def __init__(self, broker: PaperBroker) -> None:
+    def __init__(self, broker: BrokerAdapter) -> None:
         self.broker = broker
 
     def submit(self, intent: TradeIntent, decision: RiskDecision) -> PaperOrder:
