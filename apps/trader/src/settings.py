@@ -1,14 +1,21 @@
 """Typed runtime configuration with safe defaults for local PAPER mode."""
+
 from pathlib import Path
 from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 _path = Path(__file__).resolve()
 _candidates = [_path.parents[index] for index in (3, 1) if index < len(_path.parents)]
-PROJECT_ROOT = next((candidate for candidate in _candidates if (candidate / "data").exists() or (candidate / ".env").exists()), _path.parents[1])
+PROJECT_ROOT = next(
+    (
+        candidate
+        for candidate in _candidates
+        if (candidate / "data").exists() or (candidate / ".env").exists()
+    ),
+    _path.parents[1],
+)
 LOCAL_ENV = PROJECT_ROOT / ".env"
 
 
@@ -33,7 +40,9 @@ class Settings(BaseSettings):
 
     @property
     def account_configured(self) -> bool:
-        return bool(self.binance_api_key.strip() and self.binance_api_secret.get_secret_value().strip())
+        return bool(
+            self.binance_api_key.strip() and self.binance_api_secret.get_secret_value().strip()
+        )
 
     @property
     def cors_origins(self) -> list[str]:

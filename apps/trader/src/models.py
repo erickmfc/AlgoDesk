@@ -1,8 +1,9 @@
 """PostgreSQL schema primitives for durable trading state."""
+
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Float, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Float, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -54,7 +55,7 @@ class SignalRecord(Base):
     symbol: Mapped[str] = mapped_column(String(24))
     action: Mapped[str] = mapped_column(String(8))
     price: Mapped[float] = mapped_column(Float)
-    candle_timestamp: Mapped[int] = mapped_column(Integer)
+    candle_timestamp: Mapped[int] = mapped_column(BigInteger)
     reason: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -67,7 +68,7 @@ class TradeIntentRecord(Base):
     side: Mapped[str] = mapped_column(String(4))
     quantity: Mapped[float] = mapped_column(Float)
     price: Mapped[float] = mapped_column(Float)
-    candle_timestamp: Mapped[int] = mapped_column(Integer)
+    candle_timestamp: Mapped[int] = mapped_column(BigInteger)
     strategy_version: Mapped[str] = mapped_column(String(32), default="v1")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="CREATED")

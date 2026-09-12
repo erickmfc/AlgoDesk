@@ -15,12 +15,15 @@
 - [x] Extended research metrics and buy-and-hold comparison for the demo run
 - [x] PostgreSQL-ready SQLAlchemy schema for core trading records
 - [x] Typed settings, local SQLite persistence bootstrap and Docker healthchecks
+- [x] Real closed Binance Spot candles for research backtest
+- [x] Alembic bootstrap migration and CI quality gates
+- [x] PAPER candle-close runner through Strategy → Risk → OrderManager → Broker
+- [x] Persist PAPER signals, intents, orders, events, fills and snapshots
+- [x] Read-only account reconciliation primitives and User Data Stream adapter
 
 ## Next implementation gates
 
-- [ ] Persist PAPER candles, intents, orders and portfolio snapshots in PostgreSQL
-- [ ] Add Binance User Data Stream, account reconciliation and stale-data pause
-- [ ] Wire EMA/ATR strategy signals to the PAPER broker and candle-close scheduler
-- [ ] Add buy-and-hold comparison and walk-forward backtest splits
-- [ ] Add Alembic migrations and reconciliation telemetry
+- [ ] Add automatic User Data Stream keepalive/reconciliation task and stale-data pause
+- [ ] Add explicit in-sample/validation/out-of-sample and walk-forward backtest splits
+- [ ] Add stop/take-profit, spread, latency and partial-fill abstractions to PAPER
 - [ ] Run Testnet soak test before any live-candidate review

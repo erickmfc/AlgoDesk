@@ -1,9 +1,10 @@
 """Small, dependency-light trading domain used by the paper execution seam."""
+
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
-from typing import Iterable
 
 
 class OrderSide(StrEnum):
@@ -35,7 +36,15 @@ class TradeIntent:
 
     @property
     def idempotency_key(self) -> str:
-        raw = ":".join((self.strategy_id, self.symbol, str(self.candle_timestamp), self.side, self.strategy_version))
+        raw = ":".join(
+            (
+                self.strategy_id,
+                self.symbol,
+                str(self.candle_timestamp),
+                self.side,
+                self.strategy_version,
+            )
+        )
         return sha256(raw.encode()).hexdigest()[:32]
 
 
@@ -78,8 +87,16 @@ class RiskEngine:
         self.soft_stop = False
         self.hard_stop = False
 
-    def evaluate(self, intent: TradeIntent, portfolio: Portfolio, *, market_age_seconds: int = 0) -> RiskDecision:
-        checks = ["symbol valid", "quantity positive", "market data fresh", "balance available", "exposure within limit"]
+    def evaluate(
+        self, intent: TradeIntent, portfolio: Portfolio, *, market_age_seconds: int = 0
+    ) -> RiskDecision:
+        checks = [
+            "symbol valid",
+            "quantity positive",
+            "market data fresh",
+            "balance available",
+            "exposure within limit",
+        ]
         if self.hard_stop:
             return RiskDecision(False, "hard kill switch active", tuple(checks))
         if self.soft_stop:
@@ -88,13 +105,19 @@ class RiskEngine:
             return RiskDecision(False, "quantity and price must be positive", tuple(checks))
         if market_age_seconds > self.config.stale_market_data_seconds:
             return RiskDecision(False, "market data is stale", tuple(checks))
-        if portfolio.open_positions >= self.config.max_concurrent_positions:
+        if (
+            intent.side is OrderSide.BUY
+            and portfolio.open_positions >= self.config.max_concurrent_positions
+        ):
             return RiskDecision(False, "maximum concurrent positions reached", tuple(checks))
         position_value = intent.quantity * intent.price
         position_percent = position_value / portfolio.equity * 100 if portfolio.equity else 100
         if position_percent > self.config.max_position_percent:
             return RiskDecision(False, "position exposure exceeds limit", tuple(checks))
-        if portfolio.total_exposure_percent + position_percent > self.config.max_total_exposure_percent:
+        if (
+            portfolio.total_exposure_percent + position_percent
+            > self.config.max_total_exposure_percent
+        ):
             return RiskDecision(False, "portfolio exposure exceeds limit", tuple(checks))
         if portfolio.daily_loss_percent >= self.config.daily_loss_limit_percent:
             return RiskDecision(False, "daily loss limit reached", tuple(checks))
@@ -112,6 +135,7 @@ class PaperOrder:
     status: OrderStatus = OrderStatus.CREATED
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     filled_quantity: float = 0.0
+    fee: float = 0.0
 
 
 class PaperBroker:
@@ -137,3 +161,29 @@ class PaperBroker:
 
     def all_orders(self) -> Iterable[PaperOrder]:
         return self.orders.values()
+
+    def cancel_pending(self) -> int:
+        """Cancel every non-terminal paper order for the hard-stop path."""
+        canceled = 0
+        for order in self.orders.values():
+            if order.status in {
+                OrderStatus.SUBMITTING,
+                OrderStatus.SUBMITTED,
+                OrderStatus.PARTIALLY_FILLED,
+            }:
+                order.status = OrderStatus.CANCELED
+                canceled += 1
+        return canceled
+
+
+class OrderManager:
+    """Central execution boundary between RiskEngine and a broker adapter."""
+
+    def __init__(self, broker: PaperBroker) -> None:
+        self.broker = broker
+
+    def submit(self, intent: TradeIntent, decision: RiskDecision) -> PaperOrder:
+        return self.broker.submit(intent, decision)
+
+    def cancel_pending(self) -> int:
+        return self.broker.cancel_pending()

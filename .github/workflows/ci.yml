@@ -1,0 +1,40 @@
+name: AlgoDesk CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: python -m pip install -r apps/trader/requirements-dev.txt
+      - name: Ruff lint
+        run: ruff check apps/trader/src apps/trader/tests
+      - name: Ruff format check
+        run: ruff format --check apps/trader/src apps/trader/tests
+      - name: Mypy
+        run: mypy apps/trader/src
+      - name: Pytest
+        run: pytest -q apps/trader
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Frontend install
+        run: npm ci
+      - name: Frontend typecheck
+        run: npm run lint
+      - name: Frontend build
+        run: npm run build
+      - name: Compose validation
+        run: docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml config --quiet
+      - name: Dashboard image build
+        run: docker build -t algodesk-dashboard:ci .
+      - name: Trader image build
+        run: docker build -t algodesk-trader:ci apps/trader

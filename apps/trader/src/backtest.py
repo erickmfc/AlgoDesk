@@ -1,4 +1,5 @@
 """Deterministic long-only backtest with explicit trading frictions."""
+
 from dataclasses import dataclass
 from math import sqrt
 
@@ -13,6 +14,7 @@ class BacktestConfig:
     position_percent: float = 10.0
     fast_period: int = 20
     slow_period: int = 50
+    periods_per_year: float = 365.0
 
 
 @dataclass(frozen=True)
@@ -50,11 +52,20 @@ class BacktestResult:
     buy_hold_equity: float
 
 
-def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) -> tuple[BacktestResult, list[CompletedTrade]]:
+def run_backtest(
+    candles: list[Candle], config: BacktestConfig | None = None
+) -> tuple[BacktestResult, list[CompletedTrade]]:
     config = config or BacktestConfig()
-    if config.starting_cash <= 0 or not 0 < config.position_percent <= 100:
-        raise ValueError("starting_cash and position_percent must be valid")
-    signals = {signal.timestamp: signal for signal in EmaTrendStrategy(config.fast_period, config.slow_period).signals(candles)}
+    if (
+        config.starting_cash <= 0
+        or not 0 < config.position_percent <= 100
+        or config.periods_per_year <= 0
+    ):
+        raise ValueError("starting_cash, position_percent and periods_per_year must be valid")
+    signals = {
+        signal.timestamp: signal
+        for signal in EmaTrendStrategy(config.fast_period, config.slow_period).signals(candles)
+    }
     cash = config.starting_cash
     quantity = 0.0
     entry_time = 0
@@ -87,7 +98,18 @@ def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) ->
             gross_pnl = (fill_price - entry_price) * quantity
             exit_slippage = abs(candle.close - fill_price) * quantity
             trade_slippage += exit_slippage
-            trades.append(CompletedTrade(entry_time, candle.open_time, entry_price, fill_price, quantity, gross_pnl, entry_fee + exit_fee, trade_slippage))
+            trades.append(
+                CompletedTrade(
+                    entry_time,
+                    candle.open_time,
+                    entry_price,
+                    fill_price,
+                    quantity,
+                    gross_pnl,
+                    entry_fee + exit_fee,
+                    trade_slippage,
+                )
+            )
             fees_total += exit_fee
             slippage_total += exit_slippage
             quantity = 0.0
@@ -107,7 +129,18 @@ def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) ->
         exit_slippage = abs(final.close - fill_price) * quantity
         slippage_total += exit_slippage
         trade_slippage += exit_slippage
-        trades.append(CompletedTrade(entry_time, final.open_time, entry_price, fill_price, quantity, (fill_price - entry_price) * quantity, entry_fee + exit_fee, trade_slippage))
+        trades.append(
+            CompletedTrade(
+                entry_time,
+                final.open_time,
+                entry_price,
+                fill_price,
+                quantity,
+                (fill_price - entry_price) * quantity,
+                entry_fee + exit_fee,
+                trade_slippage,
+            )
+        )
     winners = sum(1 for trade in trades if trade.gross_pnl > 0)
     gross_wins = sum(trade.gross_pnl for trade in trades if trade.gross_pnl > 0)
     gross_losses = abs(sum(trade.gross_pnl for trade in trades if trade.gross_pnl < 0))
@@ -115,20 +148,44 @@ def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) ->
     average_win = gross_wins / winners if winners else 0.0
     losers = len(trades) - winners
     average_loss = gross_losses / losers if losers else 0.0
-    expectancy = ((winners / len(trades)) * average_win - (losers / len(trades)) * average_loss) if trades else 0.0
-    period_returns = [current / previous - 1 for previous, current in zip(equity_curve, equity_curve[1:]) if previous]
+    expectancy = (
+        ((winners / len(trades)) * average_win - (losers / len(trades)) * average_loss)
+        if trades
+        else 0.0
+    )
+    period_returns = [
+        current / previous - 1
+        for previous, current in zip(equity_curve, equity_curve[1:])
+        if previous
+    ]
     average_return = sum(period_returns) / len(period_returns) if period_returns else 0.0
-    variance = sum((value - average_return) ** 2 for value in period_returns) / len(period_returns) if period_returns else 0.0
+    variance = (
+        sum((value - average_return) ** 2 for value in period_returns) / len(period_returns)
+        if period_returns
+        else 0.0
+    )
     deviation = sqrt(variance)
     downside = [min(value, 0.0) for value in period_returns]
-    downside_deviation = sqrt(sum(value * value for value in downside) / len(downside)) if downside else 0.0
-    sharpe = (average_return / deviation) * sqrt(365) if deviation else 0.0
-    sortino = (average_return / downside_deviation) * sqrt(365) if downside_deviation else 0.0
+    downside_deviation = (
+        sqrt(sum(value * value for value in downside) / len(downside)) if downside else 0.0
+    )
+    sharpe = (average_return / deviation) * sqrt(config.periods_per_year) if deviation else 0.0
+    sortino = (
+        (average_return / downside_deviation) * sqrt(config.periods_per_year)
+        if downside_deviation
+        else 0.0
+    )
     periods = max(len(candles) - 1, 1)
-    cagr_percent = ((cash / config.starting_cash) ** (365 / periods) - 1) * 100 if cash > 0 else -100.0
+    cagr_percent = (
+        ((cash / config.starting_cash) ** (config.periods_per_year / periods) - 1) * 100
+        if cash > 0
+        else -100.0
+    )
     max_drawdown_value = max_drawdown / 100 * max(equity_curve or [config.starting_cash])
     recovery_factor = net_profit / max_drawdown_value if max_drawdown_value else 0.0
-    buy_hold_return_percent = ((candles[-1].close / candles[0].close) - 1) * 100 if candles and candles[0].close else 0.0
+    buy_hold_return_percent = (
+        ((candles[-1].close / candles[0].close) - 1) * 100 if candles and candles[0].close else 0.0
+    )
     buy_hold_equity = config.starting_cash * (1 + buy_hold_return_percent / 100)
     result = BacktestResult(
         equity=cash,

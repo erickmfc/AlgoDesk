@@ -6,13 +6,14 @@ import {
   WalletCards, X, Zap,
 } from 'lucide-react'
 
-type BotStatus = 'POSITION OPEN' | 'SCANNING' | 'WAITING' | 'HALTED'
+type BotStatus = 'POSITION OPEN' | 'SCANNING' | 'WAITING' | 'HALTED' | 'NOT DEPLOYED'
 type Tone = 'cyan' | 'violet' | 'amber' | 'red'
 type FeedStatus = 'websocket' | 'rest' | 'offline'
 type AccountStatus = 'loading' | 'connected' | 'not-configured' | 'error'
 type BacktestMetrics = {
   equity: number
   return_percent: number
+  cagr_percent: number
   max_drawdown_percent: number
   win_rate_percent: number
   profit_factor: number | null
@@ -20,16 +21,59 @@ type BacktestMetrics = {
   fees: number
   slippage: number
   exposure_percent: number
+  sharpe: number
+  sortino: number
+  average_win: number
+  average_loss: number
+  expectancy: number
+  recovery_factor: number
+  buy_hold_return_percent: number
+}
+type BacktestMeta = {
+  data_points: number
+  data_start: string
+  data_end: string
+  lookahead: boolean
 }
 type PaperSummary = {
+  source?: string
+  status?: string
+  symbol?: string
+  interval?: string
   equity: number
   daily_pnl: number
   drawdown_percent: number
   open_positions: number
+  allocation_percent?: number
+  last_run_at?: string | null
+  last_candle_at?: string | null
   realized_pnl_24h: number
   win_rate_24h: number
   trades_24h: number
   bot_count: number
+  hard_stop?: boolean
+  last_error?: string | null
+}
+type SystemMetrics = {
+  database_connected: boolean
+  account_configured: boolean
+  websocket_connections: number
+  websocket_reconnects: number
+  reconciliation_status: string
+  last_market_event_at?: string | null
+}
+type RiskConfig = {
+  max_position_percent: number
+  max_total_exposure_percent: number
+  hard_drawdown_limit_percent: number
+  daily_loss_limit_percent: number
+}
+type PaperActivity = {
+  time: string
+  bot: string
+  label: string
+  tone: Tone
+  text: string
 }
 
 type DeskBot = {
@@ -44,24 +88,57 @@ type DeskBot = {
   activity: string
 }
 
-const bots: DeskBot[] = [
-  { id: 'BOT-001', symbol: 'BTCUSDT', strategy: 'EMA Trend', status: 'POSITION OPEN', pnl: '+$124.32', pnlPct: '+0.42%', tone: 'cyan', position: 'LONG · 10%', activity: 'Paper snapshot: long on BTCUSDT' },
-  { id: 'BOT-002', symbol: 'ETHUSDT', strategy: 'Mean Reversion', status: 'SCANNING', pnl: '+$38.90', pnlPct: '+0.18%', tone: 'violet', position: 'FLAT', activity: 'Scanning ETHUSDT for mean reversion opportunities' },
-  { id: 'BOT-003', symbol: 'BTCUSDT', strategy: 'Mean Reversion', status: 'WAITING', pnl: '—', pnlPct: '—', tone: 'amber', position: 'FLAT', activity: 'No valid setup. Monitoring market structure' },
-  { id: 'BOT-004', symbol: 'ETHUSDT', strategy: 'EMA Trend', status: 'SCANNING', pnl: '+$17.26', pnlPct: '+0.08%', tone: 'violet', position: 'FLAT', activity: 'Scanning ETHUSDT for trend setup' },
-  { id: 'BOT-005', symbol: 'BTCUSDT', strategy: 'EMA Trend', status: 'HALTED', pnl: '-$36.21', pnlPct: '-0.14%', tone: 'red', position: 'FLAT', activity: 'Risk limit reached. Bot halted' },
+const botTemplates = [
+  { id: 'BOT-001', symbol: 'BTCUSDT', strategy: 'EMA Trend', tone: 'cyan' as Tone },
+  { id: 'BOT-002', symbol: 'ETHUSDT', strategy: 'Mean Reversion', tone: 'violet' as Tone },
+  { id: 'BOT-003', symbol: 'BTCUSDT', strategy: 'Mean Reversion', tone: 'amber' as Tone },
+  { id: 'BOT-004', symbol: 'ETHUSDT', strategy: 'EMA Trend', tone: 'violet' as Tone },
+  { id: 'BOT-005', symbol: 'BTCUSDT', strategy: 'EMA Trend', tone: 'amber' as Tone },
 ]
 
-const activities = [
-  { time: '16:27', bot: 'BOT-002', label: 'SCANNING', tone: 'violet' as Tone, text: 'Scanning ETHUSDT for mean reversion opportunities' },
-  { time: '16:26', bot: 'BOT-001', label: 'POSITION OPEN', tone: 'cyan' as Tone, text: 'Paper snapshot: long on BTCUSDT' },
-  { time: '16:24', bot: 'BOT-003', label: 'WAITING', tone: 'amber' as Tone, text: 'No valid setup. Monitoring market structure' },
-  { time: '16:22', bot: 'BOT-004', label: 'SCANNING', tone: 'violet' as Tone, text: 'Scanning ETHUSDT for trend setup' },
-  { time: '16:18', bot: 'BOT-005', label: 'HALTED', tone: 'red' as Tone, text: 'Risk limit reached. Bot halted' },
-  { time: '16:15', bot: 'BOT-001', label: 'CLOSED POSITION', tone: 'cyan' as Tone, text: 'Take profit hit. +$118.47' },
-  { time: '16:12', bot: 'BOT-002', label: 'FOUND SETUP', tone: 'violet' as Tone, text: 'ETHUSDT mean reversion signal detected' },
-  { time: '16:05', bot: 'BOT-004', label: 'CLOSED POSITION', tone: 'red' as Tone, text: 'Stop loss hit. -$36.21' },
-]
+function formatSignedUsd(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const sign = value < 0 ? '-$' : '+$'
+  return `${sign}${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function formatSignedPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return `${value < 0 ? '' : '+'}${value.toFixed(2)}%`
+}
+
+function buildDeskBots(summary: PaperSummary | null, hardStopped: boolean): DeskBot[] {
+  const engineRunning = summary?.status === 'running'
+  const activeStatus: BotStatus = hardStopped
+    ? 'HALTED'
+    : engineRunning
+      ? summary.open_positions > 0 ? 'POSITION OPEN' : 'SCANNING'
+      : 'WAITING'
+  const activePnl = summary?.realized_pnl_24h ?? null
+  const activePnlPct = summary?.equity ? (activePnl ?? 0) / summary.equity * 100 : null
+  const activeSymbol = summary?.symbol ?? botTemplates[0].symbol
+  return botTemplates.map((template, index) => index === 0
+    ? {
+      ...template,
+      status: activeStatus,
+      pnl: formatSignedUsd(activePnl),
+      pnlPct: formatSignedPercent(activePnlPct),
+      position: summary?.open_positions ? `OPEN · ${summary.allocation_percent?.toFixed(1) ?? '—'}%` : 'FLAT',
+      activity: hardStopped
+        ? 'Paper engine interlocked by the local safety control.'
+        : engineRunning
+          ? `Live paper engine on ${activeSymbol} using closed ${summary?.interval ?? '1h'} candles.`
+          : 'Waiting for the paper engine to report a healthy Binance cycle.',
+    }
+    : {
+      ...template,
+      status: 'NOT DEPLOYED',
+      pnl: '—',
+      pnlPct: '—',
+      position: 'FLAT',
+      activity: 'Configured visual station only; no paper runtime is deployed for this strategy.',
+    })
+}
 
 const navItems = [
   { id: 'operations', label: 'Operations', path: '/desk', icon: LayoutDashboard },
@@ -124,22 +201,28 @@ function StatCard({ label, value, detail, tone = 'cyan', icon: Icon }: { label: 
   return <div className={`stat-card ${toneClass(tone)}`}><div className="stat-header"><span>{label}</span><Icon size={16} /></div><strong>{value}</strong><small>{detail}</small></div>
 }
 
-function PageWorkspace({ page, botsOnline, onSelect, backtest }: { page: string; botsOnline: number; onSelect: (bot: DeskBot) => void; backtest: BacktestMetrics | null }) {
+function PageWorkspace({ page, bots, botsOnline, onSelect, backtest, backtestMeta, backtestState, paperSummary, systemMetrics, riskConfig }: { page: string; bots: DeskBot[]; botsOnline: number; onSelect: (bot: DeskBot) => void; backtest: BacktestMetrics | null; backtestMeta: BacktestMeta | null; backtestState: 'loading' | 'ready' | 'error'; paperSummary: PaperSummary | null; systemMetrics: SystemMetrics | null; riskConfig: RiskConfig | null }) {
   const title = navItems.find((item) => item.id === page)?.label ?? 'Operations'
+  const paperRunning = paperSummary?.status === 'running'
+  const drawdown = Math.abs(paperSummary?.drawdown_percent ?? 0)
+  const drawdownLimit = riskConfig?.hard_drawdown_limit_percent ?? 5
+  const riskBudgetUsed = drawdownLimit ? Math.min(100, drawdown / drawdownLimit * 100) : 0
+  const dataHealthy = Boolean(systemMetrics?.database_connected && paperRunning)
   if (page === 'operations') return null
   return <section className="workspace-panel">
     <div className="workspace-heading"><div><span className="section-kicker">ALGODESK / WORKSPACE</span><h2>{title}</h2><p>Superfície de controlo conectada ao motor paper trading.</p></div><button className="ghost-button"><RefreshCw size={15} /> Atualizar dados</button></div>
     <div className="workspace-grid">
       {page === 'bots' && bots.map((bot) => <button className="workspace-row" key={bot.id} onClick={() => onSelect(bot)}><BotAvatar status={bot.status} tone={bot.tone} /><div><strong>{bot.id}</strong><span>{bot.symbol} · {bot.strategy}</span></div><span className={`status-chip ${toneClass(bot.tone)}`}>{bot.status}</span><b>{bot.pnl}</b><ChevronRight size={16} /></button>)}
       {page === 'backtests' && <>
-        <div className="detail-panel"><div className="panel-heading"><span>Demo backtest</span><StatusMark tone="violet" pulse /></div><h3>{backtest ? `${backtest.return_percent >= 0 ? '+' : ''}${backtest.return_percent.toFixed(2)}% return` : 'Loading research run'}</h3><p>Resultado determinístico para validar o pipeline; não é previsão de rentabilidade.</p><div className="progress-track"><span style={{ width: `${Math.min(100, Math.max(0, backtest?.win_rate_percent ?? 0))}%` }} /></div><small>{backtest ? `${backtest.trades} completed trade · ${backtest.win_rate_percent.toFixed(0)}% win rate` : 'Waiting for API'}</small></div>
-        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Research metrics</span><span className="positive">{backtest ? `$${backtest.equity.toFixed(2)}` : '—'}</span></div><div className="metric-list"><span>Max drawdown <b>{backtest ? `${backtest.max_drawdown_percent.toFixed(2)}%` : '—'}</b></span><span>Profit factor <b>{backtest?.profit_factor ?? '—'}</b></span><span>Exposure <b>{backtest ? `${backtest.exposure_percent.toFixed(1)}%` : '—'}</b></span></div></div>
+        <div className="detail-panel"><div className="panel-heading"><span>Binance historical backtest</span><StatusMark tone={backtestState === 'error' ? 'amber' : 'violet'} pulse={backtestState === 'loading'} /></div><h3>{backtest ? `${backtest.return_percent >= 0 ? '+' : ''}${backtest.return_percent.toFixed(2)}% return` : backtestState === 'error' ? 'Research data unavailable' : 'Loading Binance history'}</h3><p>{backtestMeta ? `${backtestMeta.data_points} closed BTCUSDT candles · ${backtestMeta.data_start.slice(0, 10)} → ${backtestMeta.data_end.slice(0, 10)}` : backtestState === 'error' ? 'A Binance historical request failed; no synthetic result is shown.' : 'Fetching closed candles from Binance Spot.'}</p><div className="progress-track"><span style={{ width: `${Math.min(100, Math.max(0, backtest?.win_rate_percent ?? 0))}%` }} /></div><small>{backtest ? `${backtest.trades} completed trade · ${backtest.win_rate_percent.toFixed(0)}% win rate` : backtestState === 'error' ? 'Waiting for a healthy market-data response' : 'Waiting for API'}</small></div>
+        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Research metrics</span><span className="positive">{backtest ? `$${backtest.equity.toFixed(2)}` : '—'}</span></div><div className="metric-list"><span>Max drawdown <b>{backtest ? `${backtest.max_drawdown_percent.toFixed(2)}%` : '—'}</b></span><span>Profit factor <b>{backtest ? backtest.profit_factor === null ? '—' : backtest.profit_factor.toFixed(2) : '—'}</b></span><span>Exposure <b>{backtest ? `${backtest.exposure_percent.toFixed(1)}%` : '—'}</b></span></div></div>
         <div className="detail-panel"><div className="panel-heading"><span>Trading frictions</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="amber" /><span>Fees</span><b>{backtest ? `$${backtest.fees.toFixed(2)}` : '—'}</b></div><div className="guardrail"><StatusMark tone="amber" /><span>Slippage</span><b>{backtest ? `$${backtest.slippage.toFixed(2)}` : '—'}</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Lookahead</span><b>OFF</b></div></div>
+        <div className="detail-panel"><div className="panel-heading"><span>Performance</span><span className="positive">{backtest ? `${backtest.cagr_percent.toFixed(2)}% CAGR` : '—'}</span></div><div className="metric-list"><span>Sharpe <b>{backtest ? backtest.sharpe.toFixed(2) : '—'}</b></span><span>Sortino <b>{backtest ? backtest.sortino.toFixed(2) : '—'}</b></span><span>Buy &amp; hold <b>{backtest ? `${backtest.buy_hold_return_percent.toFixed(2)}%` : '—'}</b></span></div></div>
       </>}
       {page !== 'bots' && page !== 'backtests' && <>
-        <div className="detail-panel"><div className="panel-heading"><span>System overview</span><StatusMark tone="cyan" pulse /></div><h3>{title === 'Risk' ? 'Risk Engine armed' : `${title} is ready`}</h3><p>O ticker público da Binance é real; equity, PnL e eventos abaixo são um snapshot PAPER local até a conta ser conectada.</p><div className="progress-track"><span style={{ width: `${page === 'Risk' ? 68 : 84}%` }} /></div><small>{page === 'Risk' ? '68% of paper risk budget available' : `${botsOnline}/5 local paper processes healthy`}</small></div>
-        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Equity telemetry</span><span className="positive">+2.83%</span></div><Sparkline /><div className="chart-axis"><span>09:00</span><span>12:00</span><span>16:30</span></div></div>
-        <div className="detail-panel"><div className="panel-heading"><span>Guardrails</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="cyan" /><span>Live trading locked</span><b>ON</b></div><div className="guardrail"><StatusMark tone="amber" /><span>Paper mode</span><b>ACTIVE</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Spot only</span><b>ON</b></div></div>
+        <div className="detail-panel"><div className="panel-heading"><span>System overview</span><StatusMark tone={dataHealthy ? 'cyan' : 'amber'} pulse={dataHealthy} /></div><h3>{title === 'Risk' ? (paperRunning ? 'Risk Engine armed' : 'Risk telemetry waiting') : title === 'System' ? (systemMetrics?.database_connected ? 'System healthy' : 'System unavailable') : title === 'Trades' ? `${paperSummary?.trades_24h ?? 0} closed paper trades` : `${title} is ready`}</h3><p>{title === 'Risk' ? 'Risk is evaluated before each paper intent; no live order path is enabled.' : title === 'System' ? 'Runtime health comes from the FastAPI readiness and metrics endpoints.' : title === 'Trades' ? 'The list is backed by the paper engine events generated from closed Binance candles.' : 'Public Binance market data is live; account data remains read-only and optional.'}</p><div className="progress-track"><span style={{ width: `${title === 'Risk' ? riskBudgetUsed : dataHealthy ? 100 : 0}%` }} /></div><small>{title === 'Risk' ? `${drawdown.toFixed(2)}% drawdown used · limit ${drawdownLimit.toFixed(2)}%` : title === 'System' ? `${systemMetrics?.websocket_connections ?? 0} market stream connection(s) · ${systemMetrics?.websocket_reconnects ?? 0} reconnect(s)` : `${botsOnline}/5 visual stations backed by a deployed paper engine`}</small></div>
+        <div className="detail-panel chart-detail"><div className="panel-heading"><span>Equity telemetry</span><span className={paperSummary && paperSummary.daily_pnl >= 0 ? 'positive' : 'negative'}>{paperSummary ? formatSignedUsd(paperSummary.daily_pnl) : '—'}</span></div><Sparkline /><div className="chart-axis"><span>Paper start</span><span>{paperSummary?.last_candle_at ? new Date(paperSummary.last_candle_at).toLocaleDateString('pt-BR') : '—'}</span><span>{paperSummary?.last_run_at ? new Date(paperSummary.last_run_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</span></div></div>
+        <div className="detail-panel"><div className="panel-heading"><span>Guardrails</span><LockKeyhole size={15} /></div><div className="guardrail"><StatusMark tone="cyan" /><span>Live trading locked</span><b>ON</b></div><div className="guardrail"><StatusMark tone={paperRunning ? 'amber' : 'red'} /><span>Paper mode</span><b>{paperRunning ? 'ACTIVE' : 'WAITING'}</b></div><div className="guardrail"><StatusMark tone="cyan" /><span>Spot only</span><b>ON</b></div></div>
       </>}
     </div>
   </section>
@@ -157,7 +240,12 @@ function App() {
   const [feedStatus, setFeedStatus] = useState<FeedStatus>('offline')
   const [accountStatus, setAccountStatus] = useState<AccountStatus>('loading')
   const [backtestMetrics, setBacktestMetrics] = useState<BacktestMetrics | null>(null)
+  const [backtestMeta, setBacktestMeta] = useState<BacktestMeta | null>(null)
+  const [backtestState, setBacktestState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [paperSummary, setPaperSummary] = useState<PaperSummary | null>(null)
+  const [paperActivities, setPaperActivities] = useState<PaperActivity[]>([])
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null)
+  const [riskConfig, setRiskConfig] = useState<RiskConfig | null>(null)
 
   useEffect(() => { const timer = window.setInterval(() => setClock(new Date()), 1000); return () => window.clearInterval(timer) }, [])
   useEffect(() => {
@@ -212,22 +300,58 @@ function App() {
   }, [])
   useEffect(() => {
     const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
-    fetch(`${apiUrl}/api/backtests/demo`, { cache: 'no-store' })
-      .then(async (response) => response.ok ? await response.json() as { metrics?: BacktestMetrics } : Promise.reject(new Error('backtest request failed')))
-      .then((payload) => setBacktestMetrics(payload.metrics ?? null))
-      .catch(() => setBacktestMetrics(null))
+    fetch(`${apiUrl}/api/backtests/binance?symbol=BTCUSDT&interval=1h&limit=500`, { cache: 'no-store' })
+      .then(async (response) => response.ok ? await response.json() as { metrics?: BacktestMetrics; data_points?: number; data_start?: string; data_end?: string; lookahead?: boolean } : Promise.reject(new Error('backtest request failed')))
+      .then((payload) => {
+        setBacktestMetrics(payload.metrics ?? null)
+        setBacktestMeta(payload.data_points && payload.data_start && payload.data_end ? { data_points: payload.data_points, data_start: payload.data_start, data_end: payload.data_end, lookahead: payload.lookahead ?? false } : null)
+        setBacktestState(payload.metrics ? 'ready' : 'error')
+      })
+      .catch(() => { setBacktestMetrics(null); setBacktestMeta(null); setBacktestState('error') })
   }, [])
   useEffect(() => {
     const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
-    fetch(`${apiUrl}/api/paper/summary`, { cache: 'no-store' })
+    const loadPaper = () => fetch(`${apiUrl}/api/paper/summary`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as PaperSummary : Promise.reject(new Error('paper summary request failed')))
-      .then((payload) => setPaperSummary(payload))
+      .then((payload) => { setPaperSummary(payload); setHardStopped(payload.hard_stop ?? false) })
       .catch(() => setPaperSummary(null))
+    void loadPaper()
+    const timer = window.setInterval(loadPaper, 15000)
+    return () => window.clearInterval(timer)
+  }, [])
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const loadEvents = () => fetch(`${apiUrl}/api/paper/events`, { cache: 'no-store' })
+      .then(async (response) => response.ok ? await response.json() as { events?: PaperActivity[] } : Promise.reject(new Error('paper events request failed')))
+      .then((payload) => setPaperActivities(payload.events ?? []))
+      .catch(() => setPaperActivities([]))
+    void loadEvents()
+    const timer = window.setInterval(loadEvents, 15000)
+    return () => window.clearInterval(timer)
+  }, [])
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const loadSystemMetrics = () => fetch(`${apiUrl}/api/system/metrics`, { cache: 'no-store' })
+      .then(async (response) => response.ok ? await response.json() as SystemMetrics : Promise.reject(new Error('system metrics request failed')))
+      .then((payload) => setSystemMetrics(payload))
+      .catch(() => setSystemMetrics(null))
+    void loadSystemMetrics()
+    const timer = window.setInterval(loadSystemMetrics, 15000)
+    return () => window.clearInterval(timer)
+  }, [])
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    fetch(`${apiUrl}/api/risk`, { cache: 'no-store' })
+      .then(async (response) => response.ok ? await response.json() as { config?: RiskConfig } : Promise.reject(new Error('risk request failed')))
+      .then((payload) => setRiskConfig(payload.config ?? null))
+      .catch(() => setRiskConfig(null))
   }, [])
 
-  const visibleBots = useMemo(() => bots.filter((bot) => `${bot.id} ${bot.symbol} ${bot.strategy} ${bot.status}`.toLowerCase().includes(search.toLowerCase())), [search])
-  const botsOnline = bots.filter((bot) => bot.status !== 'HALTED').length
+  const bots = useMemo(() => buildDeskBots(paperSummary, hardStopped), [paperSummary, hardStopped])
+  const visibleBots = useMemo(() => bots.filter((bot) => `${bot.id} ${bot.symbol} ${bot.strategy} ${bot.status}`.toLowerCase().includes(search.toLowerCase())), [bots, search])
+  const botsOnline = paperSummary?.status === 'running' ? paperSummary.bot_count : 0
   const currentTime = clock.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const displayActivities: PaperActivity[] = paperActivities.length ? paperActivities : [{ time: '—', bot: 'PAPER', label: paperSummary?.status === 'error' ? 'ERROR' : 'WAITING', tone: paperSummary?.status === 'error' ? 'red' : 'amber', text: paperSummary?.status === 'error' ? (paperSummary.last_error ?? 'Paper engine unavailable') : 'Waiting for the first closed-candle signal' }]
 
   const selectBot = (bot: DeskBot) => { setSelectedBot(bot); setNotice(`${bot.id} selecionado para inspeção`) }
   const navigate = (page: string) => {
@@ -236,8 +360,23 @@ function App() {
     window.history.pushState({}, '', item.path)
     setActivePage(page)
   }
-  const stopAll = () => { setHardStopped(true); setNotice('HARD STOP ativado · novas ordens bloqueadas') }
-  const reenable = () => { if (enableText.trim() === 'ENABLE') { setHardStopped(false); setEnableText(''); setNotice('Motor reativado em modo PAPER') } else setNotice('Digite ENABLE para reativar o motor') }
+  const setPaperKillSwitch = async (enabled: boolean, confirmation?: string) => {
+    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    try {
+      const response = await fetch(`${apiUrl}/api/paper/kill-switch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, confirmation }) })
+      if (!response.ok) throw new Error((await response.json() as { detail?: string }).detail ?? 'kill switch request failed')
+      const payload = await response.json() as { paper?: PaperSummary }
+      setPaperSummary(payload.paper ?? null)
+      setHardStopped(enabled)
+      setNotice(enabled ? 'HARD STOP ativado no motor PAPER' : 'Motor PAPER reativado')
+      if (!enabled) { setEnableText(''); }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Não foi possível atualizar o HARD STOP')
+      if (enabled) setHardStopped(false)
+    }
+  }
+  const stopAll = () => { setHardStopped(true); void setPaperKillSwitch(true) }
+  const reenable = () => { if (enableText.trim() === 'ENABLE') void setPaperKillSwitch(false, 'ENABLE'); else setNotice('Digite ENABLE para reativar o motor') }
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -251,24 +390,24 @@ function App() {
       <header className="topbar"><div className="breadcrumb"><span>ALGODESK</span><ChevronRight size={14} /><b>{navItems.find((item) => item.id === activePage)?.label.toUpperCase()}</b></div><div className="top-actions"><span className={`connection ${feedStatus === 'offline' ? 'is-offline' : ''}`}><StatusMark tone={feedStatus === 'offline' ? 'amber' : 'cyan'} pulse={feedStatus !== 'offline'} /> {feedStatus === 'websocket' ? 'Binance WebSocket' : feedStatus === 'rest' ? 'Binance REST connected' : 'Binance feed unavailable'}</span><span className="top-time">{currentTime} BRT</span><button className="icon-button" aria-label="Notificações"><Bell size={17} /></button><button className="avatar-user">AD</button><span className="user-name">AlgoTrader</span></div></header>
 
       <div className="content">
-        <div className="page-heading"><div><p className="section-kicker">TRADING CONTROL ROOM · BINANCE SPOT · PUBLIC TICKER</p><h1>{activePage === 'operations' ? 'Operations Desk' : navItems.find((item) => item.id === activePage)?.label}</h1><p className="heading-sub">{activePage === 'operations' ? 'Five paper bots. One mission. Disciplined execution.' : 'Observe, validate and keep every decision inside the guardrails.'}</p></div><div className="heading-controls"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a bot..." aria-label="Buscar bot" /></div><div className="mode-select"><span className="mode-dot" />PAPER · LIVE LOCKED<ChevronRight size={14} /></div></div></div>
-        <div className="stats-row"><StatCard label="Paper equity snapshot" value={`$ ${(paperSummary?.equity ?? 12428.50).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} detail="Demo state · not Binance account" icon={WalletCards} /><StatCard label="Paper daily PnL" value={`$ ${(paperSummary?.daily_pnl ?? 342.18).toFixed(2)}`} detail="Demo state · not Binance PnL" tone="cyan" icon={CircleDollarSign} /><StatCard label="Paper drawdown" value={`${(paperSummary?.drawdown_percent ?? -3.12).toFixed(2)}%`} detail="Risk limit · 5.00%" tone="red" icon={Gauge} /><StatCard label="Bots online · local" value={`${botsOnline} / ${paperSummary?.bot_count ?? 5}`} detail="1 paper bot halted" tone="amber" icon={Bot} /><button className={`stop-button ${hardStopped ? 'is-stopped' : ''}`} onClick={hardStopped ? () => setHardStopped(false) : stopAll}><Square size={17} fill="currentColor" />{hardStopped ? 'HARD STOP ACTIVE' : 'PARAR TODOS OS ROBÔS'}</button></div>
+        <div className="page-heading"><div><p className="section-kicker">TRADING CONTROL ROOM · BINANCE SPOT · PUBLIC TICKER</p><h1>{activePage === 'operations' ? 'Operations Desk' : navItems.find((item) => item.id === activePage)?.label}</h1><p className="heading-sub">{activePage === 'operations' ? 'One deployed paper engine. Five transparent visual stations.' : 'Observe, validate and keep every decision inside the guardrails.'}</p></div><div className="heading-controls"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a bot..." aria-label="Buscar bot" /></div><div className="mode-select"><span className="mode-dot" />PAPER · LIVE LOCKED<ChevronRight size={14} /></div></div></div>
+        <div className="stats-row"><StatCard label="Paper equity · real market" value={paperSummary ? `$ ${paperSummary.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'} detail={paperSummary?.status === 'running' ? 'Engine · Binance closed candles' : 'Engine warming up'} icon={WalletCards} /><StatCard label="Paper realized PnL" value={formatSignedUsd(paperSummary?.daily_pnl)} detail={paperSummary?.status === 'running' ? 'Since paper session start' : 'Awaiting paper engine'} tone="cyan" icon={CircleDollarSign} /><StatCard label="Paper drawdown" value={paperSummary ? `${paperSummary.drawdown_percent.toFixed(2)}%` : '—'} detail={`Risk limit · ${(riskConfig?.hard_drawdown_limit_percent ?? 5).toFixed(2)}%`} tone="red" icon={Gauge} /><StatCard label="Bots online · local" value={`${botsOnline} / ${bots.length}`} detail="Only deployed engines count as online" tone="amber" icon={Bot} /><button className={`stop-button ${hardStopped ? 'is-stopped' : ''}`} onClick={hardStopped ? () => setHardStopped(false) : stopAll}><Square size={17} fill="currentColor" />{hardStopped ? 'HARD STOP ACTIVE' : 'PARAR TODOS OS ROBÔS'}</button></div>
 
-        <PageWorkspace page={activePage} botsOnline={botsOnline} onSelect={selectBot} backtest={backtestMetrics} />
+      <PageWorkspace page={activePage} bots={bots} botsOnline={botsOnline} onSelect={selectBot} backtest={backtestMetrics} backtestMeta={backtestMeta} backtestState={backtestState} paperSummary={paperSummary} systemMetrics={systemMetrics} riskConfig={riskConfig} />
         {activePage === 'operations' && <div className="operations-grid">
           <section className="desk-panel"><div className="desk-panel-header"><div><span className="panel-eyebrow"><Radio size={13} /> PAPER SIMULATION</span><h2>Trading floor</h2></div><div className="desk-legend"><span><i className="legend-dot cyan" />Open</span><span><i className="legend-dot violet" />Scanning</span><span><i className="legend-dot amber" />Waiting</span><span><i className="legend-dot red" />Halted</span></div></div>
             <div className="trading-floor"><div className="floor-back-wall"><div className="wall-screen screen-map"><span>MARKET GRID</span><div className="world-dots" /></div><div className="wall-screen screen-chart"><span>BTC / ETH · BINANCE PUBLIC</span><div className="market-values"><b>₿ {livePrices.BTCUSDT ? `$${livePrices.BTCUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}</b><b>Ξ {livePrices.ETHUSDT ? `$${livePrices.ETHUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}</b></div><small className="market-source">{feedStatus === 'websocket' ? 'LIVE WEBSOCKET TICKER' : feedStatus === 'rest' ? 'LIVE REST TICKER' : 'NO LIVE MARKET FEED'}</small><Sparkline /></div><div className="wall-copy">DISCIPLINE<br /><em>BEATS</em><br />EMOTION</div></div><div className="floor-grid" /><div className="floor-light light-one" /><div className="floor-light light-two" />{visibleBots.map((bot, index) => <DeskStation bot={bot} index={index} key={bot.id} onSelect={() => selectBot(bot)} selected={selectedBot?.id === bot.id} />)}<div className="floor-label">ALGODESK <span>///</span> PAPER CONTROL FLOOR</div></div>
           </section>
-          <aside className="activity-panel"><div className="activity-header"><div><span className="panel-eyebrow"><Activity size={13} /> PAPER SYSTEM LOG</span><h2>Activity feed</h2></div><button className="filter-button">All bots <ChevronRight size={13} /></button></div><div className="activity-list">{activities.map((item, index) => <button className="activity-item" key={`${item.time}-${index}`} onClick={() => { const bot = bots.find((candidate) => candidate.id === item.bot); if (bot) selectBot(bot) }}><div className="activity-rail"><StatusMark tone={item.tone} pulse={index === 0} /><span /></div><div className="activity-copy"><div className="activity-meta"><time>{item.time}</time><strong>{item.bot}</strong><em className={toneClass(item.tone)}>{item.label}</em></div><p>{item.text}</p></div></button>)}</div><button className="view-all">View full paper event log <ChevronRight size={14} /></button></aside>
+          <aside className="activity-panel"><div className="activity-header"><div><span className="panel-eyebrow"><Activity size={13} /> PAPER SYSTEM LOG</span><h2>Activity feed</h2></div><button className="filter-button">All bots <ChevronRight size={13} /></button></div><div className="activity-list">{displayActivities.map((item, index) => <button className="activity-item" key={`${item.time}-${index}`} onClick={() => { const bot = bots.find((candidate) => candidate.id === item.bot || (candidate.id === 'BOT-001' && item.bot === 'ema-btc-01')); if (bot) selectBot(bot) }}><div className="activity-rail"><StatusMark tone={item.tone} pulse={index === 0} /><span /></div><div className="activity-copy"><div className="activity-meta"><time>{item.time}</time><strong>{item.bot}</strong><em className={toneClass(item.tone)}>{item.label}</em></div><p>{item.text}</p></div></button>)}</div><button className="view-all">View full paper event log <ChevronRight size={14} /></button></aside>
         </div>}
 
-        <footer className="bottom-strip"><div className="allocation"><span className="strip-label">PAPER PORTFOLIO ALLOCATION</span><div className="allocation-body"><div className="donut"><span>100%</span></div><div className="allocation-keys"><span><i className="legend-dot cyan" />BTCUSDT <b>48%</b></span><span><i className="legend-dot violet" />ETHUSDT <b>32%</b></span><span><i className="legend-dot sky" />Others <b>20%</b></span></div></div></div><div className="strip-stat"><span className="strip-label">PAPER OPEN POSITIONS</span><strong>{paperSummary?.open_positions ?? 2}</strong><small>Across 4 local bots</small></div><div className="strip-stat positive-stat"><span className="strip-label">PAPER REALIZED PNL · 24H</span><strong>+$ {(paperSummary?.realized_pnl_24h ?? 298.65).toFixed(2)}</strong><small>Snapshot · {paperSummary?.trades_24h ?? 12} trades</small></div><div className="strip-stat"><span className="strip-label">PAPER WIN RATE · 24H</span><strong>{(paperSummary?.win_rate_24h ?? 75).toFixed(0)}%</strong><small>Snapshot · 9 W / 3 L</small></div><div className="strip-stat"><span className="strip-label">AVG. TRADE DURATION</span><strong>1h 24m</strong><small>Paper execution</small></div><div className="system-status"><span className="strip-label">SYSTEM STATUS</span><div><StatusMark tone={feedStatus === 'offline' ? 'amber' : 'cyan'} pulse={feedStatus !== 'offline'} /> {feedStatus === 'websocket' ? 'Binance WebSocket' : feedStatus === 'rest' ? 'Binance REST connected' : 'Binance feed unavailable'}</div><div><StatusMark tone={feedStatus === 'offline' ? 'amber' : 'cyan'} pulse={feedStatus !== 'offline'} /> {feedStatus === 'offline' ? 'Market data offline' : 'Market data live'}</div><div><StatusMark tone={hardStopped ? 'red' : 'amber'} /> {hardStopped ? 'Paper engine halted' : 'Paper engine running'}</div><div><StatusMark tone={accountStatus === 'connected' ? 'cyan' : 'amber'} /> {accountStatus === 'connected' ? 'Account read-only connected' : accountStatus === 'not-configured' ? 'Account not configured' : accountStatus === 'loading' ? 'Account status loading' : 'Account read failed'}</div></div><div className="strip-pulse"><Sparkline /><span>{feedStatus === 'offline' ? 'OFFLINE' : 'STABLE'}</span></div></footer>
+        <footer className="bottom-strip"><div className="allocation"><span className="strip-label">PAPER PORTFOLIO ALLOCATION</span><div className="allocation-body"><div className="donut" style={{ background: `conic-gradient(var(--cyan) 0 ${paperSummary?.allocation_percent ?? 0}%, #18364c ${paperSummary?.allocation_percent ?? 0}% 100%)` }}><span>{(paperSummary?.allocation_percent ?? 0).toFixed(0)}%</span></div><div className="allocation-keys"><span><i className="legend-dot cyan" />{paperSummary?.symbol ?? 'BTCUSDT'} <b>{(paperSummary?.allocation_percent ?? 0).toFixed(0)}%</b></span></div></div></div><div className="strip-stat"><span className="strip-label">PAPER OPEN POSITIONS</span><strong>{paperSummary?.open_positions ?? 0}</strong><small>Active paper engine</small></div><div className="strip-stat positive-stat"><span className="strip-label">PAPER REALIZED PNL</span><strong>{formatSignedUsd(paperSummary?.realized_pnl_24h)}</strong><small>Engine · {paperSummary?.trades_24h ?? 0} closed trades</small></div><div className="strip-stat"><span className="strip-label">PAPER WIN RATE</span><strong>{paperSummary ? `${paperSummary.win_rate_24h.toFixed(0)}%` : '—'}</strong><small>Realized paper trades</small></div><div className="strip-stat"><span className="strip-label">DATA SOURCE</span><strong>BINANCE</strong><small>Closed {paperSummary?.interval ?? '1h'} candles</small></div><div className="system-status"><span className="strip-label">SYSTEM STATUS</span><div><StatusMark tone={feedStatus === 'offline' ? 'amber' : 'cyan'} pulse={feedStatus !== 'offline'} /> {feedStatus === 'websocket' ? 'Binance WebSocket' : feedStatus === 'rest' ? 'Binance REST connected' : 'Binance feed unavailable'}</div><div><StatusMark tone={feedStatus === 'offline' ? 'amber' : 'cyan'} pulse={feedStatus !== 'offline'} /> {feedStatus === 'offline' ? 'Market data offline' : 'Market data live'}</div><div><StatusMark tone={hardStopped ? 'red' : 'amber'} /> {hardStopped ? 'Paper engine halted' : paperSummary?.status === 'error' ? 'Paper engine error' : paperSummary?.status === 'running' ? 'Paper engine running' : 'Paper engine starting'}</div><div><StatusMark tone={accountStatus === 'connected' ? 'cyan' : 'amber'} /> {accountStatus === 'connected' ? 'Account read-only connected' : accountStatus === 'not-configured' ? 'Account not configured' : accountStatus === 'loading' ? 'Account status loading' : 'Account read failed'}</div></div><div className="strip-pulse"><Sparkline /><span>{feedStatus === 'offline' ? 'OFFLINE' : 'STABLE'}</span></div></footer>
       </div>
     </main>
 
-    {selectedBot && <div className="inspector"><div className="inspector-top"><span>BOT INSPECTOR</span><button onClick={() => setSelectedBot(null)} aria-label="Fechar inspetor"><X size={15} /></button></div><div className="inspector-hero"><BotAvatar status={selectedBot.status} tone={selectedBot.tone} /><div><strong>{selectedBot.id}</strong><span>{selectedBot.strategy}</span></div></div><div className="inspector-status"><StatusMark tone={selectedBot.tone} pulse={selectedBot.status === 'SCANNING'} /><b>{selectedBot.status}</b><span>• {selectedBot.position}</span></div><div className="inspector-grid"><div><small>SYMBOL</small><b>{selectedBot.symbol}</b></div><div><small>PnL</small><b className={selectedBot.tone === 'red' ? 'negative' : 'positive'}>{selectedBot.pnl}</b></div><div><small>TIMEFRAME</small><b>1H</b></div><div><small>RISK USED</small><b>0.25%</b></div></div><div className="inspector-chart"><span>POSITION TELEMETRY</span><Sparkline /></div><p className="inspector-note">{selectedBot.activity}</p><button className="inspector-action" onClick={() => setNotice(`${selectedBot.id}: ação manual bloqueada no modo PAPER`)}><SlidersHorizontal size={15} /> View strategy config</button></div>}
+    {selectedBot && <div className="inspector"><div className="inspector-top"><span>BOT INSPECTOR</span><button onClick={() => setSelectedBot(null)} aria-label="Fechar inspetor"><X size={15} /></button></div><div className="inspector-hero"><BotAvatar status={selectedBot.status} tone={selectedBot.tone} /><div><strong>{selectedBot.id}</strong><span>{selectedBot.strategy}</span></div></div><div className="inspector-status"><StatusMark tone={selectedBot.tone} pulse={selectedBot.status === 'SCANNING'} /><b>{selectedBot.status}</b><span>• {selectedBot.position}</span></div><div className="inspector-grid"><div><small>SYMBOL</small><b>{selectedBot.symbol}</b></div><div><small>PnL</small><b className={selectedBot.pnl.startsWith('-') ? 'negative' : 'positive'}>{selectedBot.pnl}</b></div><div><small>TIMEFRAME</small><b>{paperSummary?.interval ?? '1h'}</b></div><div><small>RISK LIMIT</small><b>{riskConfig ? `${riskConfig.max_position_percent.toFixed(2)}%` : '—'}</b></div></div><div className="inspector-chart"><span>POSITION TELEMETRY</span><Sparkline /></div><p className="inspector-note">{selectedBot.activity}</p><button className="inspector-action" onClick={() => setNotice(`${selectedBot.id}: ação manual bloqueada no modo PAPER`)}><SlidersHorizontal size={15} /> View strategy config</button></div>}
 
-    {hardStopped && <div className="stop-modal-backdrop"><div className="stop-modal"><div className="modal-icon"><ShieldAlert size={22} /></div><span className="section-kicker">SAFETY INTERLOCK</span><h2>Hard stop active</h2><p>Novas ordens e ordens pendentes estão bloqueadas. Para reativar o motor PAPER, digite <strong>ENABLE</strong>.</p><input value={enableText} onChange={(event) => setEnableText(event.target.value)} placeholder="Digite ENABLE" autoFocus /><div className="modal-actions"><button className="ghost-button" onClick={() => { setHardStopped(false); setEnableText('') }}>Keep stopped</button><button className="primary-button" onClick={reenable}>Re-enable engine <Zap size={15} /></button></div></div></div>}
+    {hardStopped && <div className="stop-modal-backdrop"><div className="stop-modal"><div className="modal-icon"><ShieldAlert size={22} /></div><span className="section-kicker">SAFETY INTERLOCK</span><h2>Hard stop active</h2><p>Novas ordens e ordens pendentes estão bloqueadas no motor PAPER. Para reativar, digite <strong>ENABLE</strong>.</p><input value={enableText} onChange={(event) => setEnableText(event.target.value)} placeholder="Digite ENABLE" autoFocus /><div className="modal-actions"><button className="ghost-button" onClick={() => setNotice('HARD STOP permanece ativo')}>Keep stopped</button><button className="primary-button" onClick={reenable}>Re-enable engine <Zap size={15} /></button></div></div></div>}
     {notice && <div className="toast"><StatusMark tone="cyan" />{notice}</div>}
   </div>
 }

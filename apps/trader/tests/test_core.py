@@ -1,4 +1,12 @@
-from src.core import OrderSide, OrderStatus, Portfolio, RiskConfig, RiskEngine, TradeIntent, PaperBroker
+from src.core import (
+    OrderSide,
+    OrderStatus,
+    PaperBroker,
+    Portfolio,
+    RiskConfig,
+    RiskEngine,
+    TradeIntent,
+)
 
 
 def intent(quantity: float = 0.01) -> TradeIntent:

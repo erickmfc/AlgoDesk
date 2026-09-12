@@ -1,4 +1,5 @@
 """Closed-candle strategy primitives for research and paper execution."""
+
 from dataclasses import dataclass
 
 
@@ -40,7 +41,13 @@ def atr(candles: list[Candle], period: int = 14) -> list[float]:
     true_ranges: list[float] = []
     for index, candle in enumerate(candles):
         previous_close = candles[index - 1].close if index else candle.close
-        true_ranges.append(max(candle.high - candle.low, abs(candle.high - previous_close), abs(candle.low - previous_close)))
+        true_ranges.append(
+            max(
+                candle.high - candle.low,
+                abs(candle.high - previous_close),
+                abs(candle.low - previous_close),
+            )
+        )
     return ema(true_ranges, period)
 
 
@@ -61,7 +68,21 @@ class EmaTrendStrategy:
             crossed_up = fast[index] > slow[index] and fast[index - 1] <= slow[index - 1]
             crossed_down = fast[index] < slow[index] and fast[index - 1] >= slow[index - 1]
             if crossed_up:
-                signals.append(Signal(candles[index].open_time, "BUY", candles[index].close, "fast EMA crossed above slow EMA"))
+                signals.append(
+                    Signal(
+                        candles[index].open_time,
+                        "BUY",
+                        candles[index].close,
+                        "fast EMA crossed above slow EMA",
+                    )
+                )
             elif crossed_down:
-                signals.append(Signal(candles[index].open_time, "SELL", candles[index].close, "fast EMA crossed below slow EMA"))
+                signals.append(
+                    Signal(
+                        candles[index].open_time,
+                        "SELL",
+                        candles[index].close,
+                        "fast EMA crossed below slow EMA",
+                    )
+                )
         return signals

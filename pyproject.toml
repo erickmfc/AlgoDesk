@@ -1,0 +1,12 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["dist", "node_modules"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+explicit_package_bases = true

@@ -19,6 +19,17 @@ npm run dev
 
 Abra `http://localhost:4173`. O modo inicial é `PAPER`. A interface não solicita nem expõe API Secret. O SQLite de desenvolvimento fica em `E:\AlgoDesk\data\algodesk.db`.
 
+O backtest de pesquisa usa candles Spot fechados reais e pode ser consultado
+diretamente após subir o serviço:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/api/backtests/binance?symbol=BTCUSDT&interval=1h&limit=500"
+```
+
+O comando `alembic upgrade head` é executado automaticamente no container do
+trader; para executar manualmente no ambiente Python, use `alembic upgrade head`
+a partir de `E:\AlgoDesk\apps\trader`.
+
 ## Docker
 
 ```powershell
@@ -30,9 +41,9 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml up -d --
 
 - Os preços BTCUSDT e ETHUSDT mostrados no painel vêm do endpoint público Spot da Binance, são atualizados a cada 15 segundos e ficam como `—` quando a origem não responde.
 - O dashboard tenta primeiro o WebSocket público da Binance e mantém REST como fallback; o indicador mostra a origem efetiva (`WebSocket`, `REST` ou indisponível).
-- Equity, PnL, drawdown, posições, bots e activity feed são um snapshot PAPER local para validar a interface e o motor de risco; não representam saldo, ordens ou histórico da conta Binance.
+- Equity, PnL, drawdown, posições e activity feed são calculados pelo motor PAPER local a partir de candles fechados reais da Binance, iniciando com capital virtual; não representam saldo, ordens ou histórico da conta Binance. Apenas `BOT-001`/`ema-btc-01` está implantado nesta versão; as outras estações são visuais e aparecem como `NOT DEPLOYED`.
 - `/api/account/summary` faz leitura autenticada somente quando as credenciais existem no servidor; sem elas retorna `not configured` e nunca inventa saldo.
-- O serviço FastAPI expõe saúde, risco, ticker público, status de mercado, WebSocket interno e backtest demonstrativo; cotações REST usam `Cache-Control: no-store`.
+- O serviço FastAPI expõe saúde, risco, ticker público, status de mercado, WebSocket interno, backtest histórico real e o fixture demonstrativo separado; cotações REST usam `Cache-Control: no-store`.
 - O Compose inclui PostgreSQL com volume bindado em `E:\AlgoDesk\data\postgres`.
 - LIVE, Futures, Margin, leverage, short e withdrawals não são implementados.
 

@@ -1,4 +1,5 @@
 from fastapi import Response
+from src.strategies import Candle
 
 from src import main
 
@@ -23,3 +24,19 @@ def test_exchange_info_unwraps_binance_symbol_payload(monkeypatch):
     assert result["symbol"] == "BTCUSDT"
     assert result["status"] == "TRADING"
     assert result["filters"][0]["filterType"] == "LOT_SIZE"
+
+
+def test_binance_backtest_uses_public_closed_candles(monkeypatch):
+    candles = [
+        Candle(index, 100 + index, 102 + index, 99 + index, 101 + index, 1000)
+        for index in range(90)
+    ]
+    monkeypatch.setattr(main.market_client, "klines", lambda *_args: candles)
+    monkeypatch.setattr(main, "save_candles", lambda **_kwargs: len(candles))
+
+    result = main.binance_backtest(Response(), "BTCUSDT", "1h", 500)
+
+    assert result["source"] == "binance-public-spot-klines"
+    assert result["data_points"] == 90
+    assert result["persisted_candles"] == 90
+    assert result["lookahead"] is False

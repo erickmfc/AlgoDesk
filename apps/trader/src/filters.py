@@ -1,24 +1,28 @@
 """Runtime Binance symbol filters used before any future order submission."""
+
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_DOWN
+from decimal import ROUND_DOWN, Decimal
 
 
 @dataclass(frozen=True)
 class SymbolFilters:
     symbol: str
-    min_price: Decimal = Decimal("0")
-    max_price: Decimal = Decimal("0")
-    tick_size: Decimal = Decimal("0")
-    min_quantity: Decimal = Decimal("0")
-    max_quantity: Decimal = Decimal("0")
-    step_size: Decimal = Decimal("0")
-    min_notional: Decimal = Decimal("0")
+    min_price: Decimal = Decimal(0)
+    max_price: Decimal = Decimal(0)
+    tick_size: Decimal = Decimal(0)
+    min_quantity: Decimal = Decimal(0)
+    max_quantity: Decimal = Decimal(0)
+    step_size: Decimal = Decimal(0)
+    min_notional: Decimal = Decimal(0)
 
     @classmethod
     def from_exchange_info(cls, payload: dict[str, object]) -> "SymbolFilters":
         symbol = str(payload.get("symbol", "")).upper()
         values: dict[str, Decimal] = {}
-        for item in payload.get("filters", []):
+        raw_filters = payload.get("filters", [])
+        if not isinstance(raw_filters, list):
+            raw_filters = []
+        for item in raw_filters:
             if not isinstance(item, dict):
                 continue
             filter_type = item.get("filterType")
