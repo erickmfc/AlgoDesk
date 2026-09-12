@@ -1,6 +1,6 @@
 # AlgoDesk
 
-Mesa de operações gamificada para pesquisa, backtest e paper trading em Binance Spot. O dashboard já está navegável em modo demonstrativo; o motor Python começa com endpoints de saúde e permanece sem execução live.
+Mesa de operações gamificada para pesquisa, backtest e paper trading em Binance Spot. O dashboard já está navegável e consulta preços públicos da Binance através do serviço Python; o motor permanece sem execução live.
 
 ## Rodar no HD
 
@@ -21,8 +21,9 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml up -d --
 
 ## Limites atuais
 
-- O dashboard usa snapshot demonstrativo para a primeira entrega visual.
-- O serviço FastAPI expõe somente `/health` e `/ready`.
+- O dashboard usa snapshot demonstrativo para a primeira entrega visual e já pode consumir o ticker público Spot.
+- O serviço FastAPI expõe saúde, risco e ticker público Spot somente leitura.
+- O Compose inclui PostgreSQL com volume bindado em `E:\AlgoDesk\data\postgres`.
 - LIVE, Futures, Margin, leverage, short e withdrawals não são implementados.
 
 ## Próxima fase

@@ -8,6 +8,9 @@
 - [x] Paper mode and Binance connection status UI
 - [x] Hard stop interlock with `ENABLE` reactivation
 - [x] Safe environment defaults and architecture plan
+- [x] Public Binance Spot ticker adapter with CORS-safe read-only endpoint
+- [x] EMA/ATR strategy primitives and backtest with fees/slippage
+- [x] PostgreSQL-ready SQLAlchemy schema for core trading records
 
 ## Next implementation gates
 

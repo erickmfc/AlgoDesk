@@ -8,10 +8,21 @@ import os
 from typing import Literal
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from .binance import BinancePublicClient
+from .backtest import BacktestConfig, run_backtest
 from .core import Portfolio, RiskEngine, RiskConfig
+from .strategies import Candle
 
 app = FastAPI(title="AlgoDesk Trader", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:4173", "http://127.0.0.1:4173"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+market_client = BinancePublicClient()
 
 
 class RuntimeStatus(BaseModel):
@@ -47,3 +58,20 @@ def risk_state() -> dict[str, object]:
         "config": engine.config.__dict__,
         "sample_portfolio": Portfolio(equity=12428.50, balance_available=12428.50).__dict__,
     }
+
+
+@app.get("/api/market/ticker")
+def market_ticker(symbol: str = "BTCUSDT,ETHUSDT") -> dict[str, object]:
+    symbols = [value.strip() for value in symbol.split(",") if value.strip()]
+    tickers = market_client.ticker_price(symbols[:5])
+    return {"source": "binance-public-spot", "tickers": [ticker.__dict__ for ticker in tickers]}
+
+
+@app.get("/api/backtests/demo")
+def demo_backtest() -> dict[str, object]:
+    closes = [100 - (index * 0.25) for index in range(35)]
+    closes += [91.25 + (index * 0.55) + ((index % 5) * 0.08) for index in range(45)]
+    closes += [116 - (index * 0.5) + ((index % 4) * 0.06) for index in range(40)]
+    candles = [Candle(index, close - 0.5, close + 1.4, close - 1.2, close, 1000) for index, close in enumerate(closes)]
+    result, trades = run_backtest(candles, BacktestConfig(fast_period=8, slow_period=21, position_percent=10))
+    return {"mode": "backtest", "symbol": "DEMOUSDT", "metrics": result.__dict__, "trades": len(trades)}

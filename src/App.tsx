@@ -122,9 +122,26 @@ function App() {
   const [enableText, setEnableText] = useState('')
   const [notice, setNotice] = useState('')
   const [clock, setClock] = useState(new Date())
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({})
+  const [feedStatus, setFeedStatus] = useState<'live' | 'demo'>('demo')
 
   useEffect(() => { const timer = window.setInterval(() => setClock(new Date()), 1000); return () => window.clearInterval(timer) }, [])
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 3600); return () => window.clearTimeout(timer) }, [notice])
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const loadMarket = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/market/ticker?symbol=BTCUSDT,ETHUSDT`)
+        if (!response.ok) throw new Error('market request failed')
+        const payload = await response.json() as { tickers?: Array<{ symbol: string; price: number }> }
+        setLivePrices(Object.fromEntries((payload.tickers ?? []).map((ticker) => [ticker.symbol, ticker.price])))
+        setFeedStatus('live')
+      } catch { setFeedStatus('demo') }
+    }
+    void loadMarket()
+    const timer = window.setInterval(loadMarket, 15000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const visibleBots = useMemo(() => bots.filter((bot) => `${bot.id} ${bot.symbol} ${bot.strategy} ${bot.status}`.toLowerCase().includes(search.toLowerCase())), [search])
   const botsOnline = bots.filter((bot) => bot.status !== 'HALTED').length
@@ -143,7 +160,7 @@ function App() {
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="breadcrumb"><span>ALGODESK</span><ChevronRight size={14} /><b>{navItems.find((item) => item.id === activePage)?.label.toUpperCase()}</b></div><div className="top-actions"><span className="connection"><StatusMark tone="cyan" pulse /> Binance connected</span><span className="top-time">{currentTime} BRT</span><button className="icon-button" aria-label="Notificações"><Bell size={17} /></button><button className="avatar-user">AD</button><span className="user-name">AlgoTrader</span></div></header>
+      <header className="topbar"><div className="breadcrumb"><span>ALGODESK</span><ChevronRight size={14} /><b>{navItems.find((item) => item.id === activePage)?.label.toUpperCase()}</b></div><div className="top-actions"><span className="connection"><StatusMark tone="cyan" pulse /> {feedStatus === 'live' ? 'Binance connected' : 'Binance demo feed'}</span><span className="top-time">{currentTime} BRT</span><button className="icon-button" aria-label="Notificações"><Bell size={17} /></button><button className="avatar-user">AD</button><span className="user-name">AlgoTrader</span></div></header>
 
       <div className="content">
         <div className="page-heading"><div><p className="section-kicker">TRADING CONTROL ROOM · BINANCE SPOT</p><h1>{activePage === 'operations' ? 'Operations Desk' : navItems.find((item) => item.id === activePage)?.label}</h1><p className="heading-sub">{activePage === 'operations' ? 'Five bots. One mission. Disciplined execution.' : 'Observe, validate and keep every decision inside the guardrails.'}</p></div><div className="heading-controls"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a bot..." aria-label="Buscar bot" /></div><div className="mode-select"><span className="mode-dot" />PAPER<ChevronRight size={14} /></div></div></div>
@@ -152,7 +169,7 @@ function App() {
         <PageWorkspace page={activePage} botsOnline={botsOnline} onSelect={selectBot} />
         {activePage === 'operations' && <div className="operations-grid">
           <section className="desk-panel"><div className="desk-panel-header"><div><span className="panel-eyebrow"><Radio size={13} /> LIVE SIMULATION</span><h2>Trading floor</h2></div><div className="desk-legend"><span><i className="legend-dot cyan" />Open</span><span><i className="legend-dot violet" />Scanning</span><span><i className="legend-dot amber" />Waiting</span><span><i className="legend-dot red" />Halted</span></div></div>
-            <div className="trading-floor"><div className="floor-back-wall"><div className="wall-screen screen-map"><span>MARKET GRID</span><div className="world-dots" /></div><div className="wall-screen screen-chart"><span>BTC / ETH</span><Sparkline /></div><div className="wall-copy">DISCIPLINE<br /><em>BEATS</em><br />EMOTION</div></div><div className="floor-grid" /><div className="floor-light light-one" /><div className="floor-light light-two" />{visibleBots.map((bot, index) => <DeskStation bot={bot} index={index} key={bot.id} onSelect={() => selectBot(bot)} selected={selectedBot?.id === bot.id} />)}<div className="floor-label">ALGODESK <span>///</span> PAPER CONTROL FLOOR</div></div>
+            <div className="trading-floor"><div className="floor-back-wall"><div className="wall-screen screen-map"><span>MARKET GRID</span><div className="world-dots" /></div><div className="wall-screen screen-chart"><span>BTC / ETH</span><div className="market-values"><b>₿ {livePrices.BTCUSDT ? `$${livePrices.BTCUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '$62,340.10'}</b><b>Ξ {livePrices.ETHUSDT ? `$${livePrices.ETHUSDT.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '$3,420.18'}</b></div><Sparkline /></div><div className="wall-copy">DISCIPLINE<br /><em>BEATS</em><br />EMOTION</div></div><div className="floor-grid" /><div className="floor-light light-one" /><div className="floor-light light-two" />{visibleBots.map((bot, index) => <DeskStation bot={bot} index={index} key={bot.id} onSelect={() => selectBot(bot)} selected={selectedBot?.id === bot.id} />)}<div className="floor-label">ALGODESK <span>///</span> PAPER CONTROL FLOOR</div></div>
           </section>
           <aside className="activity-panel"><div className="activity-header"><div><span className="panel-eyebrow"><Activity size={13} /> SYSTEM LOG</span><h2>Activity feed</h2></div><button className="filter-button">All bots <ChevronRight size={13} /></button></div><div className="activity-list">{activities.map((item, index) => <button className="activity-item" key={`${item.time}-${index}`} onClick={() => { const bot = bots.find((candidate) => candidate.id === item.bot); if (bot) selectBot(bot) }}><div className="activity-rail"><StatusMark tone={item.tone} pulse={index === 0} /><span /></div><div className="activity-copy"><div className="activity-meta"><time>{item.time}</time><strong>{item.bot}</strong><em className={toneClass(item.tone)}>{item.label}</em></div><p>{item.text}</p></div></button>)}</div><button className="view-all">View full event log <ChevronRight size={14} /></button></aside>
         </div>}
