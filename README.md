@@ -45,7 +45,9 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml up -d --
 - `/api/account/summary` faz leitura autenticada somente quando as credenciais existem no servidor; sem elas retorna `not configured` e nunca inventa saldo.
 - O serviço `api` expõe saúde, risco, ticker público, status de mercado, WebSocket interno, backtest histórico real e o fixture demonstrativo separado; o worker `trader` executa o ciclo PAPER e persiste snapshots. Cotações REST usam `Cache-Control: no-store`.
 - O Compose inclui PostgreSQL com volume bindado em `E:\AlgoDesk\data\postgres`; `api` lê snapshots persistidos do worker e encaminha o hard stop por rede interna.
+- As dependências locais do dashboard, ambiente Python, dados PostgreSQL e configurações versionadas são mantidos em `E:\AlgoDesk`. O painel Docker serve o build Linux da imagem — sem montar os binários Windows de `node_modules` — enquanto o código-fonte e os dados persistentes ficam no HD.
 - O adaptador de execução Binance Spot Testnet está implementado, com consulta idempotente por `clientOrderId`, filtros de `exchangeInfo`, reconciliação e User Data Stream. LIVE continua travado por duas chaves (`TRADING_MODE=live` + `LIVE_TRADING_ENABLED=true`) e não deve ser habilitado nesta versão.
+- `configs/risk.yaml` e `configs/strategies/ema-btc.yaml` são carregados pelo worker em PAPER/Testnet. O backtest mostra splits independentes, vizinhos de EMA e walk-forward: parâmetros são escolhidos somente na validação, e cada janela OOS só é avaliada após a escolha.
 - Futures, Margin, leverage, short e withdrawals não são implementados.
 
 ## Docker local/VPS

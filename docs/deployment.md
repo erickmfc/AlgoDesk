@@ -15,4 +15,7 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.vps.yml up -d --bu
 
 Both overlays use `restart: unless-stopped`; the base stack health-checks
 PostgreSQL, the API service and the trader worker. Secrets belong only in an ignored `.env` or
-the VPS secret store.
+the VPS secret store. The local dashboard serves the container's production
+build: do not mount Windows `node_modules` into its Linux container, because
+the Vite native binding is platform-specific. The source, Python environment,
+YAML controls and PostgreSQL data remain under `E:\AlgoDesk`.

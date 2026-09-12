@@ -26,5 +26,7 @@ candle fechado → EMA Trend → Signal → TradeIntent → RiskEngine
 
 O scheduler PAPER já liga esse fluxo a candles fechados da Binance a cada ciclo
 de 60 segundos, persistindo sinais, intents, fills simulados, eventos e
-snapshots de portfólio. Antes de Testnet ainda faltam splits de validação,
-walk-forward, fricções adicionais e soak test.
+snapshots de portfólio. O backtest inclui fricções, splits independentes e
+walk-forward: cada candidato é escolhido na janela de validação e pontuado
+depois numa janela OOS intocada. O único gate operacional restante antes de
+qualquer revisão de LIVE é o soak supervisionado em Testnet.

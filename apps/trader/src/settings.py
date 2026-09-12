@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     alert_webhook_url: str = ""
     reconciliation_interval_seconds: int = 300
     trader_internal_url: str = "http://trader:8001"
+    risk_config_path: str = str(PROJECT_ROOT / "configs" / "risk.yaml")
+    strategy_config_path: str = str(PROJECT_ROOT / "configs" / "strategies" / "ema-btc.yaml")
 
     @property
     def account_configured(self) -> bool:

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .binance import BinancePublicClient
+from .config_loader import paper_engine_config_from_yaml, risk_config_from_yaml
+from .core import RiskEngine
 from .database import reserve_trade_intent, save_candles, save_paper_events, save_paper_snapshot
 from .monitoring import emit_alert
 from .paper_engine import PaperEngine, PaperEngineConfig
@@ -23,7 +25,8 @@ class PaperRuntime:
 
     def __post_init__(self) -> None:
         self.engine = PaperEngine(
-            PaperEngineConfig(symbol=self.symbol),
+            self._engine_config(),
+            risk=RiskEngine(risk_config_from_yaml()),
             before_submit=lambda intent, _decision: reserve_trade_intent(intent, "paper"),
         )
         self.state = "starting"
@@ -32,6 +35,10 @@ class PaperRuntime:
         self.last_error: str | None = None
         self.cycles = 0
         self.error_count = 0
+
+    def _engine_config(self) -> PaperEngineConfig:
+        configured = paper_engine_config_from_yaml()
+        return PaperEngineConfig(**{**configured.__dict__, "symbol": self.symbol})
 
     async def run_once(self) -> dict[str, object]:
         candles = await asyncio.to_thread(

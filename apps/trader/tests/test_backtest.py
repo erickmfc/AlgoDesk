@@ -1,6 +1,12 @@
 from math import isfinite
 
-from src.backtest import BacktestConfig, run_backtest, run_backtest_splits, run_parameter_sweep
+from src.backtest import (
+    BacktestConfig,
+    run_backtest,
+    run_backtest_splits,
+    run_parameter_sweep,
+    run_walk_forward,
+)
 from src.strategies import Candle, EmaTrendStrategy, ema
 
 
@@ -68,3 +74,41 @@ def test_backtest_splits_and_neighbor_sweep_are_explicit():
     assert [item["name"] for item in splits] == ["in_sample", "validation", "out_of_sample"]
     assert all(item["lookahead"] is False for item in splits)
     assert len(sweep) == 5
+
+
+def test_walk_forward_selects_only_from_validation_before_scoring_oos():
+    long_candles = candles([100 + ((index // 7) % 2) * 10 + (index % 3) for index in range(300)])
+    config = BacktestConfig(fast_period=4, slow_period=8)
+
+    baseline = run_walk_forward(
+        long_candles,
+        config,
+        folds=2,
+        candidates=((3, 7), (4, 8), (5, 10)),
+    )
+    mutated = list(long_candles)
+    first_oos_start = baseline["folds"][0]["windows"]["out_of_sample"]["data_start"]
+    for index, candle in enumerate(mutated):
+        if candle.open_time >= first_oos_start:
+            mutated[index] = Candle(
+                candle.open_time,
+                candle.open,
+                candle.high * 5,
+                candle.low / 5,
+                candle.close * 5,
+                candle.volume,
+            )
+    re_run = run_walk_forward(
+        mutated,
+        config,
+        folds=2,
+        candidates=((3, 7), (4, 8), (5, 10)),
+    )
+
+    assert baseline["lookahead"] is False
+    assert all(fold["lookahead"] is False for fold in baseline["folds"])
+    assert baseline["folds"][0]["selected"] == re_run["folds"][0]["selected"]
+    assert (
+        baseline["folds"][0]["out_of_sample"]["metrics"]
+        != re_run["folds"][0]["out_of_sample"]["metrics"]
+    )

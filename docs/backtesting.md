@@ -18,10 +18,12 @@ The response explicitly reports `lookahead: false` and the date range used.
 
 The endpoint also returns independent `in_sample`, `validation` and
 `out_of_sample` summaries. The five neighboring EMA candidates are evaluated
-on the in-sample segment only; true walk-forward parameter selection is still
-an open gate.
+on the in-sample segment only. Its `walk_forward` result creates chronological
+folds, ranks candidate parameters only with the validation window, and scores
+the selected parameter on an untouched out-of-sample window. The response
+records the exact data ranges and `lookahead: false` for every fold.
 
 `/api/backtests/demo` remains only as a deterministic unit-test fixture. Its
 synthetic candles are not market history and must never be used as evidence of
-profitability. The independent splits are available on the Binance endpoint;
-true walk-forward analysis remains required before a Testnet soak gate.
+profitability. A supervised Testnet soak remains required before any
+live-candidate review.

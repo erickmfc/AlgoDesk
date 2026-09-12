@@ -16,4 +16,6 @@ snapshot. The current release exposes public market data and a signed account
 reader only; it does not submit orders to Binance.
 
 Local runtime stores its database under `E:\AlgoDesk\data`. Compose overlays
-replace that connection with PostgreSQL without changing Python code.
+replace that connection with PostgreSQL without changing Python code. The
+versioned risk and strategy controls live in `E:\AlgoDesk\configs` and are
+mounted read-only into the local trader container; they contain no secrets.

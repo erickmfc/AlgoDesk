@@ -17,4 +17,11 @@ keeps the listen key alive and reconciles after reconnects and on a periodic
 Testnet schedule. A divergence pauses the worker and requires reconciliation;
 the Testnet soak remains a prerequisite for any live-candidate review.
 
+At Testnet startup, the worker restores the configured symbol's base and quote
+balances and rebuilds the remaining average entry price from Binance
+`myTrades`. It refuses to trade if that history cannot reproduce the current
+base balance. Confirmed execution reports are applied once by cumulative fill
+quantity; the local state remains paused on malformed stream messages or a
+reconciliation mismatch.
+
 No secret belongs in the frontend, Git or logs. The intended key permissions are read and Spot Trading only, with withdrawals, Futures and Margin disabled. `LIVE_TRADING_ENABLED=false` remains a second application-level lock.

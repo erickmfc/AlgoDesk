@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from .account_stream import UserDataStreamManager
 from .binance import BinancePrivateClient, BinancePublicClient, BinanceUserDataStream
+from .config_loader import paper_engine_config_from_yaml, risk_config_from_yaml
 from .core import RiskEngine
 from .database import (
     latest_account_balances,
@@ -27,6 +28,58 @@ from .strategies import Candle
 logger = logging.getLogger("algodesk.testnet")
 
 
+def _as_bool(value: object) -> bool:
+    return value is True or str(value).lower() == "true"
+
+
+def reconstructed_entry_price(
+    trades: list[dict[str, object]],
+    *,
+    expected_quantity: float,
+    base_asset: str,
+    quote_asset: str,
+    tolerance: float,
+) -> float:
+    """Rebuild the remaining Spot position with an average-cost ledger.
+
+    A mismatch is intentionally fatal to startup: guessing an inherited
+    position's cost or quantity would let the strategy trade on untrusted
+    local state.  Commission in either base or quote is included when Binance
+    reports it; third-asset commissions do not change the position quantity.
+    """
+    quantity = 0.0
+    cost = 0.0
+    for trade in sorted(trades, key=lambda row: int(str(row.get("time", 0)))):
+        try:
+            executed = float(str(trade.get("qty", 0)))
+            price = float(str(trade.get("price", 0)))
+            commission = float(str(trade.get("commission", 0)))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Testnet trade history contains an invalid fill") from exc
+        if executed <= 0 or price <= 0:
+            continue
+        commission_asset = str(trade.get("commissionAsset", "")).upper()
+        if _as_bool(trade.get("isBuyer")):
+            received = executed - (commission if commission_asset == base_asset else 0.0)
+            if received < -tolerance:
+                raise RuntimeError("Testnet base-asset commission exceeds buy quantity")
+            cost += executed * price + (commission if commission_asset == quote_asset else 0.0)
+            quantity += max(0.0, received)
+            continue
+        consumed = executed + (commission if commission_asset == base_asset else 0.0)
+        if consumed > quantity + tolerance:
+            raise RuntimeError("Testnet trade history sells more base asset than it buys")
+        average_cost = cost / quantity if quantity else 0.0
+        consumed = min(consumed, quantity)
+        cost -= average_cost * consumed
+        quantity -= consumed
+    if abs(quantity - expected_quantity) > tolerance:
+        raise RuntimeError(
+            "Testnet position cannot be restored from trade history; trading remains paused"
+        )
+    return cost / quantity if quantity > tolerance else 0.0
+
+
 @dataclass
 class TestnetRuntime:
     market_client: BinancePublicClient
@@ -42,8 +95,8 @@ class TestnetRuntime:
             trading_mode="testnet",
         )
         self.engine = PaperEngine(
-            PaperEngineConfig(symbol=self.symbol),
-            risk=RiskEngine(),
+            self._engine_config(),
+            risk=RiskEngine(risk_config_from_yaml()),
             broker=self.broker,
             before_submit=lambda intent, _decision: reserve_trade_intent(intent, "testnet"),
         )
@@ -56,12 +109,21 @@ class TestnetRuntime:
         self.cycles = 0
         self._bootstrapped = False
         self.error_count = 0
+        self.base_asset = ""
+        self.quote_asset = ""
         self.user_stream = UserDataStreamManager(
             self.account_client,
             BinanceUserDataStream("wss://stream.testnet.binance.vision/ws"),
             on_account_event=self._on_account_event,
             on_reconnect=self._on_stream_reconnect,
         )
+
+    def _engine_config(self, *, starting_cash: float | None = None) -> PaperEngineConfig:
+        configured = paper_engine_config_from_yaml()
+        values = {**configured.__dict__, "symbol": self.symbol}
+        if starting_cash is not None:
+            values["starting_cash"] = starting_cash
+        return PaperEngineConfig(**values)
 
     async def run_once(self) -> dict[str, object]:
         if not self.account_client.configured:
@@ -147,7 +209,19 @@ class TestnetRuntime:
             self._persist_snapshot()
 
     async def _on_account_event(self, event: dict[str, object]) -> None:
-        if str(event.get("e", "")) in {
+        event_type = str(event.get("e", ""))
+        if event_type == "executionReport":
+            try:
+                self.engine.apply_execution_report(
+                    client_order_id=str(event.get("c", "")),
+                    status=str(event.get("X", "UNKNOWN")),
+                    cumulative_quantity=float(str(event.get("z", 0))),
+                    last_price=float(str(event.get("L", 0))),
+                )
+            except (TypeError, ValueError) as exc:
+                self.engine.risk.hard_stop = True
+                self.last_error = f"invalid Testnet execution report: {exc}"
+        if event_type in {
             "executionReport",
             "outboundAccountPosition",
             "balanceUpdate",
@@ -182,33 +256,79 @@ class TestnetRuntime:
             else []
         )
         save_account_balances(balances)
+        exchange_info = await asyncio.to_thread(self.market_client.exchange_info, self.symbol)
+        rows = exchange_info.get("symbols", [])
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise RuntimeError("Binance Testnet exchange metadata is unavailable")
+        symbol_info = rows[0]
+        self.base_asset = str(symbol_info.get("baseAsset", "")).upper()
+        self.quote_asset = str(symbol_info.get("quoteAsset", "")).upper()
+        if not self.base_asset or not self.quote_asset:
+            raise RuntimeError("Binance Testnet symbol metadata has no base/quote assets")
+        self.broker.filters[self.symbol] = SymbolFilters.from_exchange_info(symbol_info)
         quote_balance = next(
             (
                 float(item["free"]) + float(item["locked"])
                 for item in balances
-                if item["asset"] == "USDT"
+                if item["asset"] == self.quote_asset
             ),
             0.0,
         )
-        if quote_balance <= 0:
-            raise RuntimeError("Testnet account has no USDT balance")
+        base_balance = next(
+            (
+                float(item["free"]) + float(item["locked"])
+                for item in balances
+                if item["asset"] == self.base_asset
+            ),
+            0.0,
+        )
+        tickers = await asyncio.to_thread(self.market_client.ticker_price, [self.symbol])
+        if not tickers or tickers[0].price <= 0:
+            raise RuntimeError("Binance Testnet position cannot be marked without a Spot price")
+        mark_price = tickers[0].price
+        tolerance = max(float(self.broker.filters[self.symbol].step_size), 1e-8)
+        entry_price = 0.0
+        if base_balance > tolerance:
+            trades = await asyncio.to_thread(self.account_client.my_trades, self.symbol, 1000)
+            entry_price = reconstructed_entry_price(
+                trades,
+                expected_quantity=base_balance,
+                base_asset=self.base_asset,
+                quote_asset=self.quote_asset,
+                tolerance=tolerance,
+            )
+        if quote_balance <= 0 and base_balance <= tolerance:
+            raise RuntimeError(
+                f"Testnet account has no {self.quote_asset} or {self.base_asset} balance"
+            )
         self.engine = PaperEngine(
-            PaperEngineConfig(symbol=self.symbol, starting_cash=quote_balance),
-            risk=RiskEngine(),
+            self._engine_config(starting_cash=quote_balance),
+            risk=RiskEngine(risk_config_from_yaml()),
             broker=self.broker,
             before_submit=lambda intent, _decision: reserve_trade_intent(intent, "testnet"),
         )
-        exchange_info = await asyncio.to_thread(self.market_client.exchange_info, self.symbol)
-        rows = exchange_info.get("symbols", [])
-        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-            self.broker.filters[self.symbol] = SymbolFilters.from_exchange_info(rows[0])
+        self.engine.restore_account_state(
+            cash=quote_balance,
+            quantity=base_balance,
+            entry_price=entry_price,
+            mark_price=mark_price,
+        )
         self._bootstrapped = True
 
     async def _reconcile(self) -> ReconciliationResult:
+        local_balances = latest_account_balances()
+        if self._bootstrapped and self.base_asset and self.quote_asset:
+            # Local expected base/quote balances come from confirmed fills and
+            # restored account state, not from the last remote snapshot.
+            local_balances = {
+                **local_balances,
+                self.base_asset: self.engine.quantity,
+                self.quote_asset: self.engine.cash,
+            }
         result = await asyncio.to_thread(
             AccountReconciler().reconcile,
             self.account_client,
-            local_balances=latest_account_balances(),
+            local_balances=local_balances,
             local_open_order_ids=local_open_order_ids(),
         )
         self.last_reconciliation_at = datetime.now(timezone.utc)

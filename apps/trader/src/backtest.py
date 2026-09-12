@@ -6,6 +6,7 @@ candles and never calls an exchange or an order endpoint.
 
 from dataclasses import dataclass
 from math import sqrt
+from typing import cast
 
 from .strategies import Candle, EmaTrendStrategy, Signal, atr
 
@@ -72,6 +73,15 @@ class BacktestResult:
     stop_loss_trades: int
     take_profit_trades: int
     latency_bars: int
+
+
+DEFAULT_EMA_CANDIDATES: tuple[tuple[int, int], ...] = (
+    (18, 45),
+    (19, 48),
+    (20, 50),
+    (21, 52),
+    (22, 55),
+)
 
 
 def _validate_config(config: BacktestConfig) -> None:
@@ -410,9 +420,8 @@ def run_parameter_sweep(
         return []
     train_end = max(config.slow_period + 1, int(len(candles) * 0.6))
     research_candles = candles[: min(train_end, len(candles))]
-    candidates = ((18, 45), (19, 48), (20, 50), (21, 52), (22, 55))
     results: list[dict[str, object]] = []
-    for fast_period, slow_period in candidates:
+    for fast_period, slow_period in DEFAULT_EMA_CANDIDATES:
         candidate = BacktestConfig(
             **{**config.__dict__, "fast_period": fast_period, "slow_period": slow_period}
         )
@@ -427,3 +436,139 @@ def run_parameter_sweep(
             }
         )
     return results
+
+
+def _selection_score(result: BacktestResult) -> tuple[float, float, float, int]:
+    """Rank a candidate using validation data only, conservatively."""
+    return (
+        result.expectancy,
+        result.return_percent,
+        -result.max_drawdown_percent,
+        result.trades,
+    )
+
+
+def run_walk_forward(
+    candles: list[Candle],
+    config: BacktestConfig | None = None,
+    *,
+    folds: int = 3,
+    initial_train_ratio: float = 0.5,
+    validation_ratio: float = 0.2,
+    candidates: tuple[tuple[int, int], ...] = DEFAULT_EMA_CANDIDATES,
+) -> dict[str, object]:
+    """Select EMA parameters on validation windows, then score untouched OOS windows.
+
+    Each fold is chronological.  A fold's test candles are never evaluated until
+    after its candidate is selected; later folds may use earlier OOS periods as
+    historical data, as they would in a real rolling deployment.
+    """
+    config = config or BacktestConfig()
+    _validate_config(config)
+    if (
+        folds <= 0
+        or not 0 < initial_train_ratio < 1
+        or not 0 < validation_ratio < 1
+        or initial_train_ratio + validation_ratio >= 1
+        or not candidates
+    ):
+        raise ValueError("invalid walk-forward configuration")
+
+    minimum_segment = config.slow_period + 1
+    initial_train_size = max(minimum_segment, int(len(candles) * initial_train_ratio))
+    validation_size = max(minimum_segment, int(len(candles) * validation_ratio))
+    first_test_start = initial_train_size + validation_size
+    remaining = len(candles) - first_test_start
+    actual_folds = min(folds, remaining // minimum_segment)
+    if actual_folds <= 0:
+        return {
+            "lookahead": False,
+            "selection_metric": "validation_expectancy_then_return_then_drawdown",
+            "folds": [],
+            "message": "not enough candles for independent train, validation and OOS windows",
+        }
+
+    test_size = remaining // actual_folds
+    results: list[dict[str, object]] = []
+    for fold in range(actual_folds):
+        test_start = first_test_start + fold * test_size
+        test_end = len(candles) if fold == actual_folds - 1 else test_start + test_size
+        validation_start = test_start - validation_size
+        training = candles[:validation_start]
+        validation = candles[validation_start:test_start]
+        out_of_sample = candles[test_start:test_end]
+        evaluations: list[dict[str, object]] = []
+        for fast_period, slow_period in candidates:
+            candidate = BacktestConfig(
+                **{**config.__dict__, "fast_period": fast_period, "slow_period": slow_period}
+            )
+            train_metrics, _ = run_backtest(training, candidate)
+            validation_metrics, _ = run_backtest(validation, candidate)
+            evaluations.append(
+                {
+                    "fast_period": fast_period,
+                    "slow_period": slow_period,
+                    "in_sample": train_metrics,
+                    "validation": validation_metrics,
+                }
+            )
+        selected = max(
+            evaluations,
+            key=lambda item: _selection_score(item["validation"]),  # type: ignore[arg-type]
+        )
+        selected_config = BacktestConfig(
+            **{
+                **config.__dict__,
+                "fast_period": cast(int, selected["fast_period"]),
+                "slow_period": cast(int, selected["slow_period"]),
+            }
+        )
+        oos_metrics, oos_trades = run_backtest(out_of_sample, selected_config)
+        results.append(
+            {
+                "fold": fold + 1,
+                "lookahead": False,
+                "windows": {
+                    "in_sample": {
+                        "data_points": len(training),
+                        "data_start": training[0].open_time,
+                        "data_end": training[-1].open_time,
+                    },
+                    "validation": {
+                        "data_points": len(validation),
+                        "data_start": validation[0].open_time,
+                        "data_end": validation[-1].open_time,
+                    },
+                    "out_of_sample": {
+                        "data_points": len(out_of_sample),
+                        "data_start": out_of_sample[0].open_time,
+                        "data_end": out_of_sample[-1].open_time,
+                    },
+                },
+                "candidate_evaluations": [
+                    {
+                        "fast_period": item["fast_period"],
+                        "slow_period": item["slow_period"],
+                        "in_sample": item["in_sample"].__dict__,  # type: ignore[union-attr]
+                        "validation": item["validation"].__dict__,  # type: ignore[union-attr]
+                    }
+                    for item in evaluations
+                ],
+                "selected": {
+                    "fast_period": selected["fast_period"],
+                    "slow_period": selected["slow_period"],
+                    "selection_scope": "validation_only",
+                    "validation_metrics": selected["validation"].__dict__,  # type: ignore[union-attr]
+                },
+                "out_of_sample": {
+                    "metrics": oos_metrics.__dict__,
+                    "trades": len(oos_trades),
+                    "selection_scope": "untouched_until_scoring",
+                },
+            }
+        )
+    return {
+        "lookahead": False,
+        "selection_metric": "validation_expectancy_then_return_then_drawdown",
+        "folds": results,
+    }

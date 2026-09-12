@@ -16,9 +16,16 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .backtest import BacktestConfig, run_backtest, run_backtest_splits, run_parameter_sweep
+from .backtest import (
+    BacktestConfig,
+    run_backtest,
+    run_backtest_splits,
+    run_parameter_sweep,
+    run_walk_forward,
+)
 from .binance import BinanceMarketStream, BinancePrivateClient, BinancePublicClient
-from .core import RiskConfig, RiskEngine
+from .config_loader import risk_config_from_yaml
+from .core import RiskEngine
 from .database import (
     init_db,
     latest_account_balances,
@@ -189,7 +196,7 @@ def ready() -> RuntimeStatus:
 
 @app.get("/api/risk")
 def risk_state() -> dict[str, object]:
-    engine = RiskEngine(RiskConfig())
+    engine = RiskEngine(risk_config_from_yaml())
     runtime = active_runtime()
     stored = latest_runtime_summary(settings.trading_mode) if runtime is None else None
     return {
@@ -621,4 +628,5 @@ def binance_backtest(
         "trades": len(trades),
         "splits": run_backtest_splits(candles, config),
         "parameter_sweep": run_parameter_sweep(candles, config),
+        "walk_forward": run_walk_forward(candles, config),
     }

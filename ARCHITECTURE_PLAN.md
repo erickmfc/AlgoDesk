@@ -24,7 +24,7 @@ hard stop to the worker over the private Compose network.
 2. Python domain models, RiskEngine and PaperBroker (complete)
 3. Binance Spot public REST/WebSocket adapter and signed account reader (complete)
 4. PostgreSQL persistence, user-stream reconciliation and health metrics (complete)
-5. Backtest engine with frictions, metrics and independent splits (complete; walk-forward remains)
+5. Backtest engine with frictions, metrics, independent splits and validation-selected walk-forward OOS scoring (complete)
 6. Testnet broker gate and deployment overlays (complete; soak test remains)
 7. Live-candidate review; LIVE remains disabled until manually approved
 

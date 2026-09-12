@@ -65,6 +65,8 @@ class PaperEngine:
         self.peak_equity = self.config.starting_cash
         self.processed_signals: set[int] = set()
         self.events: list[PaperEvent] = []
+        self._orders_by_client_id: dict[str, tuple[TradeIntent, PaperOrder]] = {}
+        self._applied_fill_quantity: dict[str, float] = {}
 
     def process_closed_candles(
         self, candles: list[Candle], *, market_age_seconds: int = 0
@@ -107,11 +109,69 @@ class PaperEngine:
             event = PaperEvent(intent, decision, order)
             self.events.append(event)
             new_events.append(event)
-            if order.status is OrderStatus.FILLED:
-                self._apply_fill(intent, order)
+            self._orders_by_client_id[order.client_order_id] = (intent, order)
+            if isinstance(self.broker, PaperBroker) and order.status in {
+                OrderStatus.FILLED,
+                OrderStatus.PARTIALLY_FILLED,
+            }:
+                self._apply_cumulative_fill(intent, order, order.filled_quantity, intent.price)
         self.last_price = candles[-1].close
         self._update_peak()
         return new_events
+
+    def restore_account_state(
+        self,
+        *,
+        cash: float,
+        quantity: float,
+        entry_price: float,
+        mark_price: float,
+    ) -> None:
+        """Initialize a Testnet engine from reconciled exchange balances.
+
+        This deliberately resets local PnL statistics: historical account PnL
+        belongs to Binance, while subsequent strategy events are measured from
+        the restored mark.  Invalid account state is rejected before a worker
+        can create any intent.
+        """
+        if cash < 0 or quantity < 0 or mark_price <= 0 or (quantity > 0 and entry_price <= 0):
+            raise ValueError("invalid restored account state")
+        self.cash = cash
+        self.quantity = quantity
+        self.entry_price = entry_price if quantity else 0.0
+        self.entry_fee = 0.0
+        self.realized_pnl = 0.0
+        self.closed_trade_pnls = []
+        self.fees_paid = 0.0
+        self.last_price = mark_price
+        self.peak_equity = self.equity
+
+    def apply_execution_report(
+        self,
+        *,
+        client_order_id: str,
+        status: str,
+        cumulative_quantity: float,
+        last_price: float,
+    ) -> bool:
+        """Apply only the unaccounted fill delta from a Binance user-stream event."""
+        tracked = self._orders_by_client_id.get(client_order_id)
+        if tracked is None:
+            return False
+        intent, order = tracked
+        status_map = {
+            "NEW": OrderStatus.SUBMITTED,
+            "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+            "FILLED": OrderStatus.FILLED,
+            "CANCELED": OrderStatus.CANCELED,
+            "REJECTED": OrderStatus.REJECTED,
+            "EXPIRED": OrderStatus.CANCELED,
+        }
+        order.status = status_map.get(status.upper(), OrderStatus.UNKNOWN)
+        order.filled_quantity = max(order.filled_quantity, cumulative_quantity)
+        self._apply_cumulative_fill(intent, order, cumulative_quantity, last_price or intent.price)
+        self._update_peak()
+        return True
 
     @property
     def equity(self) -> float:
@@ -147,22 +207,37 @@ class PaperEngine:
             "drawdown_percent": self.portfolio.drawdown_percent,
         }
 
-    def _apply_fill(self, intent: TradeIntent, order: PaperOrder) -> None:
-        notional = intent.quantity * intent.price
+    def _apply_cumulative_fill(
+        self, intent: TradeIntent, order: PaperOrder, cumulative_quantity: float, price: float
+    ) -> None:
+        applied = self._applied_fill_quantity.get(order.client_order_id, 0.0)
+        quantity = max(0.0, cumulative_quantity - applied)
+        if quantity <= 1e-12:
+            return
+        self._applied_fill_quantity[order.client_order_id] = applied + quantity
+        notional = quantity * price
         fee = notional * self.config.fee_bps / 10_000
-        order.fee = fee
+        order.fee += fee
         self.fees_paid += fee
         if intent.side is OrderSide.BUY:
             self.cash -= notional + fee
-            self.quantity += intent.quantity
-            self.entry_price = intent.price
-            self.entry_fee = fee
+            previous_notional = self.quantity * self.entry_price
+            self.quantity += quantity
+            self.entry_price = (
+                (previous_notional + notional) / self.quantity if self.quantity else 0.0
+            )
+            self.entry_fee += fee
         else:
             self.cash += notional - fee
-            trade_pnl = (intent.price - self.entry_price) * intent.quantity - self.entry_fee - fee
+            closing_quantity = min(quantity, self.quantity)
+            allocated_entry_fee = (
+                self.entry_fee * (closing_quantity / self.quantity) if self.quantity else 0.0
+            )
+            trade_pnl = (price - self.entry_price) * closing_quantity - allocated_entry_fee - fee
             self.realized_pnl += trade_pnl
             self.closed_trade_pnls.append(trade_pnl)
-            self.quantity = max(0.0, self.quantity - intent.quantity)
+            self.quantity = max(0.0, self.quantity - closing_quantity)
+            self.entry_fee = max(0.0, self.entry_fee - allocated_entry_fee)
             if self.quantity == 0:
                 self.entry_price = 0.0
                 self.entry_fee = 0.0

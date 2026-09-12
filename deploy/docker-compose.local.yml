@@ -1,10 +1,11 @@
 services:
   dashboard:
-    command: npm run dev -- --host 0.0.0.0
-    volumes:
-      - .:/app
-      - algodesk_node_modules:/app/node_modules
+    # Serve the Linux image build; host node_modules cannot be mounted into
+    # Alpine because its native Vite bindings target Windows.
+    command: npm run preview -- --host 0.0.0.0
   api:
+    volumes:
+      - ./configs:/app/configs:ro
     environment:
       - APPLICATION_ROLE=api
       - APP_PORT=8000
@@ -12,6 +13,8 @@ services:
       - TRADER_INTERNAL_URL=http://trader:8001
       - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk
   trader:
+    volumes:
+      - ./configs:/app/configs:ro
     environment:
       - APPLICATION_ROLE=trader
       - APP_PORT=8001
@@ -19,6 +22,3 @@ services:
       - TRADING_MODE=paper
       - LIVE_TRADING_ENABLED=false
       - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk
-
-volumes:
-  algodesk_node_modules:

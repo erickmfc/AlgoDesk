@@ -29,7 +29,7 @@
 
 ## Next implementation gates
 
-- [ ] Add true walk-forward parameter selection with untouched out-of-sample scoring
-- [ ] Persist and restore Testnet positions/balances instead of starting from quote-only virtual state
+- [x] True walk-forward parameter selection using validation-only choice and untouched OOS scoring
+- [x] Restore Testnet base/quote balances and average entry price from Binance fills, fail-closed on mismatch
 - [x] Fail-closed market-cycle alert/pause policy for the long-running worker
 - [ ] Run Testnet soak test before any live-candidate review

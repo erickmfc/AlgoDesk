@@ -2,10 +2,14 @@ services:
   dashboard:
     restart: unless-stopped
   api:
+    volumes:
+      - ./configs:/app/configs:ro
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk
   trader:
+    volumes:
+      - ./configs:/app/configs:ro
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk
