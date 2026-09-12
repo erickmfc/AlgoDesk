@@ -16,6 +16,7 @@ class OrderStatus(StrEnum):
     RISK_APPROVED = "RISK_APPROVED"
     SUBMITTING = "SUBMITTING"
     SUBMITTED = "SUBMITTED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
     CANCELED = "CANCELED"
     REJECTED = "REJECTED"
@@ -53,9 +54,13 @@ class RiskConfig:
     max_concurrent_positions: int = 2
     max_position_percent: float = 10.0
     max_total_exposure_percent: float = 25.0
+    risk_per_trade_percent: float = 0.25
     daily_loss_limit_percent: float = 1.0
     hard_drawdown_limit_percent: float = 5.0
     stale_market_data_seconds: int = 30
+    allow_margin: bool = False
+    allow_futures: bool = False
+    allow_leverage: bool = False
 
 
 @dataclass(frozen=True)

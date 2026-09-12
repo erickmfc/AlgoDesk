@@ -8,6 +8,7 @@ services:
     environment:
       - TRADING_MODE=paper
       - LIVE_TRADING_ENABLED=false
+      - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk
 
 volumes:
   algodesk_node_modules:

@@ -1,0 +1,10 @@
+node_modules
+dist
+.venv
+.git
+.pytest_cache
+data/*.db
+data/postgres
+docs/*.png
+*.log
+.env

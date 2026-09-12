@@ -2,7 +2,7 @@ from src.models import Base
 
 
 def test_required_persistence_tables_exist():
-    required = {"candles", "strategies", "trade_intents", "orders", "fills", "portfolio_snapshots", "risk_events", "system_events", "bot_status"}
+    required = {"candles", "strategies", "strategy_runs", "signals", "trade_intents", "orders", "order_events", "fills", "portfolio_snapshots", "account_balances", "risk_events", "system_events", "bot_status"}
     assert required.issubset(Base.metadata.tables)
 
 

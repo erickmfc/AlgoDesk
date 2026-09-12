@@ -1,5 +1,6 @@
 """Deterministic long-only backtest with explicit trading frictions."""
 from dataclasses import dataclass
+from math import sqrt
 
 from .strategies import Candle, EmaTrendStrategy
 
@@ -37,6 +38,16 @@ class BacktestResult:
     fees: float
     slippage: float
     exposure_percent: float
+    net_profit: float
+    cagr_percent: float
+    sharpe: float
+    sortino: float
+    average_win: float
+    average_loss: float
+    expectancy: float
+    recovery_factor: float
+    buy_hold_return_percent: float
+    buy_hold_equity: float
 
 
 def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) -> tuple[BacktestResult, list[CompletedTrade]]:
@@ -49,11 +60,13 @@ def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) ->
     entry_time = 0
     entry_price = 0.0
     entry_fee = 0.0
+    trade_slippage = 0.0
     peak_equity = cash
     max_drawdown = 0.0
     fees_total = 0.0
     slippage_total = 0.0
     trades: list[CompletedTrade] = []
+    equity_curve: list[float] = []
     for candle in candles:
         signal = signals.get(candle.open_time)
         if signal and signal.action == "BUY" and quantity == 0:
@@ -64,19 +77,24 @@ def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) ->
             cash -= notional + entry_fee
             entry_time, entry_price = candle.open_time, fill_price
             fees_total += entry_fee
-            slippage_total += abs(fill_price - candle.close) * quantity
+            trade_slippage = abs(fill_price - candle.close) * quantity
+            slippage_total += trade_slippage
         elif signal and signal.action == "SELL" and quantity:
             fill_price = candle.close * (1 - config.slippage_bps / 10_000)
             notional = quantity * fill_price
             exit_fee = notional * config.fee_bps / 10_000
             cash += notional - exit_fee
             gross_pnl = (fill_price - entry_price) * quantity
-            trades.append(CompletedTrade(entry_time, candle.open_time, entry_price, fill_price, quantity, gross_pnl, entry_fee + exit_fee, slippage_total))
+            exit_slippage = abs(candle.close - fill_price) * quantity
+            trade_slippage += exit_slippage
+            trades.append(CompletedTrade(entry_time, candle.open_time, entry_price, fill_price, quantity, gross_pnl, entry_fee + exit_fee, trade_slippage))
             fees_total += exit_fee
-            slippage_total += abs(candle.close - fill_price) * quantity
+            slippage_total += exit_slippage
             quantity = 0.0
             entry_fee = 0.0
+            trade_slippage = 0.0
         equity = cash + (quantity * candle.close)
+        equity_curve.append(equity)
         peak_equity = max(peak_equity, equity)
         max_drawdown = max(max_drawdown, (peak_equity - equity) / peak_equity * 100)
     if quantity and candles:
@@ -86,11 +104,32 @@ def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) ->
         exit_fee = notional * config.fee_bps / 10_000
         cash += notional - exit_fee
         fees_total += exit_fee
-        slippage_total += abs(final.close - fill_price) * quantity
-        trades.append(CompletedTrade(entry_time, final.open_time, entry_price, fill_price, quantity, (fill_price - entry_price) * quantity, entry_fee + exit_fee, slippage_total))
+        exit_slippage = abs(final.close - fill_price) * quantity
+        slippage_total += exit_slippage
+        trade_slippage += exit_slippage
+        trades.append(CompletedTrade(entry_time, final.open_time, entry_price, fill_price, quantity, (fill_price - entry_price) * quantity, entry_fee + exit_fee, trade_slippage))
     winners = sum(1 for trade in trades if trade.gross_pnl > 0)
     gross_wins = sum(trade.gross_pnl for trade in trades if trade.gross_pnl > 0)
     gross_losses = abs(sum(trade.gross_pnl for trade in trades if trade.gross_pnl < 0))
+    net_profit = cash - config.starting_cash
+    average_win = gross_wins / winners if winners else 0.0
+    losers = len(trades) - winners
+    average_loss = gross_losses / losers if losers else 0.0
+    expectancy = ((winners / len(trades)) * average_win - (losers / len(trades)) * average_loss) if trades else 0.0
+    period_returns = [current / previous - 1 for previous, current in zip(equity_curve, equity_curve[1:]) if previous]
+    average_return = sum(period_returns) / len(period_returns) if period_returns else 0.0
+    variance = sum((value - average_return) ** 2 for value in period_returns) / len(period_returns) if period_returns else 0.0
+    deviation = sqrt(variance)
+    downside = [min(value, 0.0) for value in period_returns]
+    downside_deviation = sqrt(sum(value * value for value in downside) / len(downside)) if downside else 0.0
+    sharpe = (average_return / deviation) * sqrt(365) if deviation else 0.0
+    sortino = (average_return / downside_deviation) * sqrt(365) if downside_deviation else 0.0
+    periods = max(len(candles) - 1, 1)
+    cagr_percent = ((cash / config.starting_cash) ** (365 / periods) - 1) * 100 if cash > 0 else -100.0
+    max_drawdown_value = max_drawdown / 100 * max(equity_curve or [config.starting_cash])
+    recovery_factor = net_profit / max_drawdown_value if max_drawdown_value else 0.0
+    buy_hold_return_percent = ((candles[-1].close / candles[0].close) - 1) * 100 if candles and candles[0].close else 0.0
+    buy_hold_equity = config.starting_cash * (1 + buy_hold_return_percent / 100)
     result = BacktestResult(
         equity=cash,
         return_percent=(cash / config.starting_cash - 1) * 100,
@@ -101,5 +140,15 @@ def run_backtest(candles: list[Candle], config: BacktestConfig | None = None) ->
         fees=fees_total,
         slippage=slippage_total,
         exposure_percent=config.position_percent if trades else 0,
+        net_profit=net_profit,
+        cagr_percent=cagr_percent,
+        sharpe=sharpe,
+        sortino=sortino,
+        average_win=average_win,
+        average_loss=average_loss,
+        expectancy=expectancy,
+        recovery_factor=recovery_factor,
+        buy_hold_return_percent=buy_hold_return_percent,
+        buy_hold_equity=buy_hold_equity,
     )
     return result, trades

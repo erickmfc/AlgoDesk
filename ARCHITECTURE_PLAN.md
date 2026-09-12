@@ -12,15 +12,19 @@
 
 `MarketData → Strategy → TradeIntent → RiskEngine → ExecutionManager → BrokerAdapter → Binance`
 
-The dashboard is a read-only operator surface in v0.1. It currently uses a deterministic demo snapshot so the visual workflow can be reviewed without credentials. The Python service is the seam for real market data and paper execution.
+The dashboard is a read-only operator surface. It uses a deterministic PAPER
+snapshot for bot/account metrics and real Binance public market prices through
+REST/WebSocket. An optional server-side signed account reader is available but
+does not submit orders. The Python service is the seam for real market data and
+paper execution.
 
 ## Phases
 
-1. Dashboard shell and operator interactions (current)
-2. Python domain models, RiskEngine and PaperBroker
-3. Binance Spot market adapter with REST/WebSocket reconnection
-4. PostgreSQL persistence, reconciliation and health metrics
-5. Backtest engine with fees, slippage and walk-forward splits
+1. Dashboard shell, operator interactions and paper labels (complete)
+2. Python domain models, RiskEngine and PaperBroker (complete)
+3. Binance Spot public REST/WebSocket adapter and signed account reader (partial)
+4. PostgreSQL persistence, user-stream reconciliation and health metrics
+5. Backtest engine with frictions, metrics and walk-forward splits (partial)
 6. Testnet gate and deployment overlays
 7. Live-candidate review; LIVE remains disabled until manually approved
 

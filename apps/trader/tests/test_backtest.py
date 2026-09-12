@@ -1,3 +1,5 @@
+from math import isfinite
+
 from src.backtest import BacktestConfig, run_backtest
 from src.strategies import Candle, EmaTrendStrategy, ema
 
@@ -21,3 +23,7 @@ def test_backtest_applies_fees_and_slippage():
     assert result.fees > 0
     assert result.slippage > 0
     assert result.equity != 1000
+    assert isfinite(result.sharpe)
+    assert isfinite(result.sortino)
+    assert result.buy_hold_equity > 0
+    assert isfinite(result.expectancy)

@@ -3,3 +3,5 @@ services:
     restart: unless-stopped
   trader:
     restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk

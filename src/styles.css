@@ -43,3 +43,6 @@ button { border: 0; color: inherit; cursor: pointer; }
 .market-values b { font-weight: 400; }
 .connection.is-offline { color: #edc467; }
 .market-source { position: absolute; left: 13px; bottom: 31px; color: #5f889e; font: 7px 'DM Mono', monospace; letter-spacing: .08em; }
+.metric-list { display: flex; flex-direction: column; gap: 12px; margin-top: 22px; color: #7b9bb0; font: 10px 'DM Mono', monospace; }
+.metric-list span { display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.metric-list b { color: #dceef8; font-weight: 400; }
