@@ -137,6 +137,7 @@ class PaperOrder:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     filled_quantity: float = 0.0
     fee: float = 0.0
+    raw_response: dict[str, object] | None = None
 
 
 class BrokerAdapter(Protocol):

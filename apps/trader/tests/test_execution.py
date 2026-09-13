@@ -49,6 +49,7 @@ def test_testnet_broker_maps_filled_order_and_is_idempotent(monkeypatch):
 
     assert first.status is OrderStatus.FILLED
     assert first.filled_quantity == 0.01
+    assert first.raw_response == {"orderId": 42, "status": "FILLED", "executedQty": "0.01"}
     assert second.client_order_id == first.client_order_id
     assert len(calls) == 1
 
@@ -95,4 +96,26 @@ def test_testnet_broker_recovers_existing_remote_order(monkeypatch):
 
     assert order.status is OrderStatus.FILLED
     assert order.filled_quantity == 0.01
+    assert order.raw_response == {"orderId": 42, "status": "FILLED", "executedQty": "0.01"}
     assert called is False
+
+
+def test_hard_stop_only_cancels_algodesk_managed_orders(monkeypatch):
+    client = BinancePrivateClient("key", "secret", "https://testnet.binance.vision")
+    canceled = []
+    monkeypatch.setattr(
+        client,
+        "open_orders",
+        lambda: [
+            {"symbol": "BTCUSDT", "orderId": 1, "clientOrderId": "manual-order", "status": "NEW"},
+            {"symbol": "BTCUSDT", "orderId": 2, "clientOrderId": "AD-T-managed", "status": "NEW"},
+        ],
+    )
+    monkeypatch.setattr(
+        client,
+        "cancel_spot_order",
+        lambda **kwargs: canceled.append(kwargs) or {"status": "CANCELED"},
+    )
+
+    assert BinanceSpotBroker(client, trading_mode="testnet").cancel_pending() == 1
+    assert canceled == [{"symbol": "BTCUSDT", "order_id": "2", "client_order_id": "AD-T-managed"}]

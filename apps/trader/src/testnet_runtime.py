@@ -15,6 +15,7 @@ from .database import (
     reserve_trade_intent,
     save_account_balances,
     save_candles,
+    save_execution_report,
     save_paper_events,
     save_paper_snapshot,
 )
@@ -212,12 +213,30 @@ class TestnetRuntime:
         event_type = str(event.get("e", ""))
         if event_type == "executionReport":
             try:
-                self.engine.apply_execution_report(
-                    client_order_id=str(event.get("c", "")),
+                client_order_id = str(event.get("c", ""))
+                applied = self.engine.apply_execution_report(
+                    client_order_id=client_order_id,
                     status=str(event.get("X", "UNKNOWN")),
                     cumulative_quantity=float(str(event.get("z", 0))),
                     last_price=float(str(event.get("L", 0))),
                 )
+                persisted = await asyncio.to_thread(
+                    save_execution_report,
+                    client_order_id=client_order_id,
+                    status=str(event.get("X", "UNKNOWN")),
+                    cumulative_quantity=float(str(event.get("z", 0))),
+                    last_price=float(str(event.get("L", 0))),
+                    raw_response=event,
+                )
+                if not applied or not persisted:
+                    self.engine.risk.hard_stop = True
+                    self.last_error = "untracked Testnet execution report; trading paused"
+                    emit_alert(
+                        "untracked Testnet execution report",
+                        symbol=self.symbol,
+                        event="testnet_untracked_execution",
+                        client_order_id=client_order_id,
+                    )
             except (TypeError, ValueError) as exc:
                 self.engine.risk.hard_stop = True
                 self.last_error = f"invalid Testnet execution report: {exc}"

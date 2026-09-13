@@ -186,6 +186,13 @@ function pageForPath(pathname: string) {
   return navItems.find((item) => item.path === pathname)?.id ?? 'operations'
 }
 
+function runtimeApiUrl() {
+  const configured = process.env.NEXT_PUBLIC_API_URL?.trim()
+  if (configured) return configured.replace(/\/$/, '')
+  if (typeof window !== 'undefined') return `${window.location.protocol}//${window.location.hostname}:8000`
+  return 'http://localhost:8000'
+}
+
 function toneClass(tone: Tone) { return `tone-${tone}` }
 
 function StatusMark({ tone, pulse = false }: { tone: Tone; pulse?: boolean }) {
@@ -314,7 +321,7 @@ function App() {
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     const loadEquity = () => fetch(`${apiUrl}/api/paper/equity?limit=60`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { points?: EquityPoint[] } : Promise.reject(new Error('equity request failed')))
       .then((payload) => setEquityPoints((payload.points ?? []).filter((point) => Number.isFinite(point.equity))))
@@ -325,8 +332,8 @@ function App() {
   }, [])
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 3600); return () => window.clearTimeout(timer) }, [notice])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? apiUrl.replace(/^http/, 'ws')
+    const apiUrl = runtimeApiUrl()
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL?.trim() || apiUrl.replace(/^http/, 'ws')
     let socket: WebSocket | undefined
     let disposed = false
     const loadMarket = async () => {
@@ -362,14 +369,14 @@ function App() {
     return () => { disposed = true; socket?.close(); window.clearInterval(timer) }
   }, [])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     fetch(`${apiUrl}/api/account/summary`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { connected?: boolean; configured?: boolean } : Promise.reject(new Error('account request failed')))
       .then((payload) => setAccountStatus(payload.connected ? 'connected' : payload.configured ? 'error' : 'not-configured'))
       .catch(() => setAccountStatus('error'))
   }, [])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     fetch(`${apiUrl}/api/backtests/binance?symbol=BTCUSDT&interval=1h&limit=500`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { metrics?: BacktestMetrics; data_points?: number; data_start?: string; data_end?: string; lookahead?: boolean; frictions?: BacktestMeta['frictions']; splits?: BacktestSplit[]; parameter_sweep?: unknown[]; walk_forward?: { folds?: WalkForwardFold[] } } : Promise.reject(new Error('backtest request failed')))
       .then((payload) => {
@@ -383,7 +390,7 @@ function App() {
       .catch(() => { setBacktestMetrics(null); setBacktestMeta(null); setBacktestSplits([]); setParameterSweepCount(0); setWalkForwardFolds([]); setBacktestState('error') })
   }, [])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     const loadPaper = () => fetch(`${apiUrl}/api/paper/summary`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as PaperSummary : Promise.reject(new Error('paper summary request failed')))
       .then((payload) => { setPaperSummary(payload); setHardStopped(payload.hard_stop ?? false) })
@@ -393,7 +400,7 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     const loadEvents = () => fetch(`${apiUrl}/api/paper/events`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { events?: PaperActivity[] } : Promise.reject(new Error('paper events request failed')))
       .then((payload) => setPaperActivities(payload.events ?? []))
@@ -403,7 +410,7 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     const loadSystemMetrics = () => fetch(`${apiUrl}/api/system/metrics`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as SystemMetrics : Promise.reject(new Error('system metrics request failed')))
       .then((payload) => setSystemMetrics(payload))
@@ -413,7 +420,7 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     fetch(`${apiUrl}/api/risk`, { cache: 'no-store' })
       .then(async (response) => response.ok ? await response.json() as { config?: RiskConfig } : Promise.reject(new Error('risk request failed')))
       .then((payload) => setRiskConfig(payload.config ?? null))
@@ -434,7 +441,7 @@ function App() {
     setActivePage(page)
   }
   const setPaperKillSwitch = async (enabled: boolean, confirmation?: string) => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiUrl = runtimeApiUrl()
     try {
       const response = await fetch(`${apiUrl}/api/paper/kill-switch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, confirmation }) })
       if (!response.ok) throw new Error((await response.json() as { detail?: string }).detail ?? 'kill switch request failed')

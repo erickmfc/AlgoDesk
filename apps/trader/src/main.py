@@ -7,6 +7,7 @@ explicitly satisfied.
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Literal
@@ -34,6 +35,7 @@ from .database import (
     ping_db,
     recent_paper_events,
     recent_runtime_equity,
+    runtime_order_metrics,
     save_account_balances,
     save_candles,
 )
@@ -183,14 +185,18 @@ def ready() -> RuntimeStatus:
     database_available = ping_db()
     mode = settings.trading_mode
     live_enabled = settings.live_trading_enabled
+    account_configured = settings.account_configured
+    trading_enabled = mode == "paper" or (
+        mode in {"testnet", "live"} and account_configured and (mode == "testnet" or live_enabled)
+    )
     return RuntimeStatus(
         mode=mode,
         live_trading_enabled=live_enabled,
         broker="paper" if mode in {"backtest", "paper"} else "binance-spot",
-        trading_enabled=mode in {"paper", "testnet"} or (mode == "live" and live_enabled),
+        trading_enabled=trading_enabled,
         database_connected=database_available,
         market_data_source="binance-public-spot",
-        account_configured=settings.account_configured,
+        account_configured=account_configured,
     )
 
 
@@ -362,6 +368,8 @@ def market_status(response: Response) -> dict[str, object]:
     return {
         "source": "binance-public-spot",
         "websocket": market_stream.stream_url(["BTCUSDT", "ETHUSDT"]),
+        "websocket_connected": market_stream.connected,
+        "websocket_last_message_at": market_stream.last_message_at,
         "last_market_event_at": last_market_event_at.isoformat() if last_market_event_at else None,
     }
 
@@ -422,6 +430,13 @@ def system_metrics(response: Response) -> dict[str, object]:
     database_available = ping_db()
     runtime = active_runtime()
     persisted_runtime = latest_runtime_summary(settings.trading_mode) if runtime is None else None
+    runtime_summary = runtime.summary() if runtime is not None else persisted_runtime
+    connected_since = market_stream.connected_since
+    websocket_uptime_seconds = (
+        max(0.0, time.time() - connected_since) if connected_since is not None else 0.0
+    )
+    runtime_errors = runtime_summary.get("errors", 0) if runtime_summary else 0
+    error_count = runtime_errors if isinstance(runtime_errors, int) else 0
     return {
         "mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
@@ -430,8 +445,20 @@ def system_metrics(response: Response) -> dict[str, object]:
         "market_data_source": "binance-public-spot",
         "last_market_event_at": last_market_event_at.isoformat() if last_market_event_at else None,
         "websocket_connections": websocket_connections,
+        "websocket_connected": market_stream.connected,
+        "websocket_uptime_seconds": websocket_uptime_seconds,
+        "websocket_last_message_at": market_stream.last_message_at,
         "websocket_reconnects": market_stream.reconnects,
-        "paper_runtime": runtime.summary() if runtime is not None else persisted_runtime,
+        "paper_runtime": runtime_summary,
+        "orders": runtime_order_metrics(settings.trading_mode),
+        "errors": error_count,
+        "strategy_state": (
+            "HALTED"
+            if runtime_summary and runtime_summary.get("hard_stop")
+            else str(runtime_summary.get("status", "UNKNOWN")).upper()
+            if runtime_summary
+            else "UNKNOWN"
+        ),
         "reconciliation_status": reconciliation_status,
         "last_reconciliation_at": last_reconciliation_at.isoformat()
         if last_reconciliation_at

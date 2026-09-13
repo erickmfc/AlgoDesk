@@ -99,6 +99,7 @@ class BinanceSpotBroker:
 
     def cancel_pending(self) -> int:
         canceled = 0
+        managed_prefix = "AD-T-" if self.trading_mode == "testnet" else "AD-L-"
         try:
             remote_orders = self.client.open_orders()
         except Exception:
@@ -113,6 +114,10 @@ class BinanceSpotBroker:
                 if remote.get("clientOrderId") is not None
                 else None
             )
+            # A hard stop belongs to AlgoDesk-managed orders only; never cancel
+            # unrelated manual orders on the same Binance account.
+            if client_id is None or not client_id.startswith(managed_prefix):
+                continue
             try:
                 self.client.cancel_spot_order(
                     symbol=symbol, order_id=order_id, client_order_id=client_id
@@ -141,6 +146,7 @@ class BinanceSpotBroker:
             intent=intent,
             status=status,
             filled_quantity=filled_quantity,
+            raw_response=remote,
         )
 
     def _client_order_id(self, intent: TradeIntent) -> str:

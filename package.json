@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 4173",
     "lint": "tsc --noEmit",
-    "verify:runtime": "python scripts/verify_runtime.py --base-url http://127.0.0.1:8000"
+    "verify:runtime": "python scripts/verify_runtime.py --base-url http://127.0.0.1:8000",
+    "soak:runtime": "python scripts/soak_runtime.py --base-url http://127.0.0.1:8000 --cycles 12 --interval 5"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.3",

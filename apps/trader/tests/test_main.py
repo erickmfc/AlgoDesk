@@ -40,3 +40,16 @@ def test_binance_backtest_uses_public_closed_candles(monkeypatch):
     assert result["data_points"] == 90
     assert result["persisted_candles"] == 90
     assert result["lookahead"] is False
+
+
+def test_ready_fails_closed_for_unconfigured_testnet(monkeypatch):
+    monkeypatch.setattr(main.settings, "trading_mode", "testnet")
+    monkeypatch.setattr(main.settings, "live_trading_enabled", False)
+    monkeypatch.setattr(main.settings, "binance_api_key", "")
+    monkeypatch.setattr(main, "ping_db", lambda: True)
+
+    result = main.ready()
+
+    assert result.mode == "testnet"
+    assert result.account_configured is False
+    assert result.trading_enabled is False

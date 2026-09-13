@@ -75,7 +75,12 @@ class BinancePublicClient:
         return candles
 
     def klines_history(
-        self, symbol: str, interval: str = "1h", *, start_time: int, end_time: int | None = None,
+        self,
+        symbol: str,
+        interval: str = "1h",
+        *,
+        start_time: int,
+        end_time: int | None = None,
         page_size: int = 1000,
     ) -> list[Candle]:
         """Download a deterministic, gap-preserving historical range page by page."""
@@ -85,7 +90,9 @@ class BinancePublicClient:
         candles: list[Candle] = []
         while True:
             params: dict[str, object] = {
-                "symbol": symbol.upper(), "interval": interval, "limit": page_size,
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "limit": page_size,
                 "startTime": cursor,
             }
             if end_time is not None:
@@ -98,14 +105,26 @@ class BinancePublicClient:
             with urlopen(request, timeout=12) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
                 payload = json.load(response)
             page = [
-                Candle(int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5]))
-                for row in payload if isinstance(row, list) and len(row) >= 7
+                Candle(
+                    int(row[0]),
+                    float(row[1]),
+                    float(row[2]),
+                    float(row[3]),
+                    float(row[4]),
+                    float(row[5]),
+                )
+                for row in payload
+                if isinstance(row, list) and len(row) >= 7
             ]
             if not page:
                 break
             candles.extend(page)
             next_cursor = page[-1].open_time + 1
-            if len(page) < page_size or next_cursor <= cursor or (end_time is not None and next_cursor > end_time):
+            if (
+                len(page) < page_size
+                or next_cursor <= cursor
+                or (end_time is not None and next_cursor > end_time)
+            ):
                 break
             cursor = next_cursor
         return sorted({c.open_time: c for c in candles}.values(), key=lambda c: c.open_time)
@@ -292,6 +311,9 @@ class BinanceMarketStream:
     def __init__(self, base_url: str = "wss://stream.binance.com:9443/stream") -> None:
         self.base_url = base_url.rstrip("/")
         self.reconnects = 0
+        self.connected = False
+        self.connected_since: float | None = None
+        self.last_message_at: float | None = None
 
     def stream_url(self, symbols: list[str]) -> str:
         streams = "/".join(f"{symbol.lower()}@miniTicker" for symbol in symbols)
@@ -312,13 +334,20 @@ class BinanceMarketStream:
                     max_size=2**20,
                 ) as socket:
                     reconnect_delay = 1.0
-                    async for raw_message in socket:
-                        payload = json.loads(raw_message)
-                        data = payload.get("data", payload) if isinstance(payload, dict) else {}
-                        symbol = str(data.get("s", "")).upper()
-                        raw_price = data.get("c") or data.get("p")
-                        if symbol in normalized and raw_price is not None:
-                            yield Ticker(symbol, float(raw_price))
+                    self.connected = True
+                    self.connected_since = time.time()
+                    try:
+                        async for raw_message in socket:
+                            payload = json.loads(raw_message)
+                            data = payload.get("data", payload) if isinstance(payload, dict) else {}
+                            symbol = str(data.get("s", "")).upper()
+                            raw_price = data.get("c") or data.get("p")
+                            if symbol in normalized and raw_price is not None:
+                                self.last_message_at = time.time()
+                                yield Ticker(symbol, float(raw_price))
+                    finally:
+                        self.connected = False
+                        self.connected_since = None
             except asyncio.CancelledError:
                 raise
             except RuntimeError as exc:

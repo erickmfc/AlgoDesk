@@ -1,5 +1,6 @@
 """SQLAlchemy engine and small persistence boundary."""
 
+import json
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,7 +199,12 @@ def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
                     symbol=intent.symbol,
                     side=intent.side.value,
                     status=order.status.value,
-                    raw_response=f'{{"broker":"{mode}"}}',
+                    raw_response=json.dumps(
+                        order.raw_response or {"broker": mode},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
                     updated_at=created_at,
                 )
             )
@@ -210,7 +216,7 @@ def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
                     created_at=created_at,
                 )
             )
-            if order.status.value == "FILLED":
+            if order.filled_quantity > 0:
                 session.add(
                     FillRecord(
                         order_id=order_id,
@@ -224,6 +230,71 @@ def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
         if inserted:
             session.commit()
         return inserted
+
+
+def save_execution_report(
+    *,
+    client_order_id: str,
+    status: str,
+    cumulative_quantity: float,
+    last_price: float,
+    raw_response: dict[str, object],
+) -> bool:
+    """Persist one Binance execution update and only its new fill delta."""
+    status_map = {
+        "NEW": "SUBMITTED",
+        "PARTIALLY_FILLED": "PARTIALLY_FILLED",
+        "FILLED": "FILLED",
+        "CANCELED": "CANCELED",
+        "REJECTED": "REJECTED",
+        "EXPIRED": "CANCELED",
+    }
+    normalized_status = status_map.get(status.upper(), "UNKNOWN")
+    with SessionLocal() as session:
+        order = session.scalar(
+            select(OrderRecord).where(OrderRecord.client_order_id == client_order_id)
+        )
+        if order is None:
+            return False
+        previous_quantity = sum(
+            float(fill.quantity)
+            for fill in session.scalars(
+                select(FillRecord).where(FillRecord.order_id == order.order_id)
+            ).all()
+        )
+        cumulative = max(0.0, float(cumulative_quantity))
+        delta = max(0.0, cumulative - previous_quantity)
+        now = datetime.now(timezone.utc)
+        order.status = normalized_status
+        order.raw_response = json.dumps(
+            raw_response, ensure_ascii=False, sort_keys=True, default=str
+        )
+        order.updated_at = now
+        intent = session.get(TradeIntentRecord, order.order_id)
+        if intent is None and order.order_id.startswith(("PAPER-", "TESTNET-")):
+            intent = session.get(TradeIntentRecord, order.order_id.split("-", 1)[1])
+        if intent is not None:
+            intent.status = normalized_status
+        session.add(
+            OrderEventRecord(
+                order_id=order.order_id,
+                status=normalized_status,
+                details=f"Binance execution report: {status.upper()}",
+                created_at=now,
+            )
+        )
+        if delta > 1e-12 and last_price > 0:
+            session.add(
+                FillRecord(
+                    order_id=order.order_id,
+                    price=float(last_price),
+                    quantity=delta,
+                    fee=0.0,
+                    filled_at=now,
+                )
+            )
+        session.commit()
+        return True
 
 
 def reserve_trade_intent(intent: TradeIntent, mode: str = "paper") -> None:
@@ -293,6 +364,20 @@ def local_open_order_ids() -> set[str]:
             )
         ).all()
         return set(rows)
+
+
+def runtime_order_metrics(mode: str = "paper") -> dict[str, int]:
+    """Return durable order counts for the stateless API metrics surface."""
+    prefix = f"{mode.upper()}-"
+    open_statuses = {"CREATED", "RISK_APPROVED", "SUBMITTING", "SUBMITTED", "PARTIALLY_FILLED"}
+    with SessionLocal() as session:
+        orders = session.scalars(
+            select(OrderRecord).where(OrderRecord.order_id.like(f"{prefix}%"))
+        ).all()
+        return {
+            "total": len(orders),
+            "open": sum(1 for order in orders if order.status in open_statuses),
+        }
 
 
 def latest_runtime_summary(mode: str = "paper") -> dict[str, object] | None:

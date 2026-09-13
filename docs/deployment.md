@@ -18,4 +18,8 @@ PostgreSQL, the API service and the trader worker. Secrets belong only in an ign
 the VPS secret store. The local dashboard serves the container's production
 build: do not mount Windows `node_modules` into its Linux container, because
 the frontend's native bindings are platform-specific. The source, Python environment,
-YAML controls and PostgreSQL data remain under `E:\AlgoDesk`.
+YAML controls and PostgreSQL data remain under `E:\AlgoDesk`. The dashboard
+resolves the API from `NEXT_PUBLIC_API_URL` when explicitly provided, or from
+the browser host on port `8000`, so the same image works on the local machine
+and on a VPS without rebuilding application code. Set `ALLOWED_ORIGINS` in the
+VPS secret/environment store to the dashboard origin.

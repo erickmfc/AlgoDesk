@@ -2,7 +2,7 @@
 
 ## Done in v0.1.0
 
-- [x] React/Vite dashboard on the HD
+- [x] Next.js dashboard on the HD
 - [x] Operations Desk with 5 bot states
 - [x] Search and bot inspector interactions
 - [x] Paper mode and Binance connection status UI
@@ -34,3 +34,5 @@
 - [x] Fail-closed market-cycle alert/pause policy for the long-running worker
 - [ ] Run Testnet soak test before any live-candidate review
 - [x] Add repeatable read-only runtime verification for health, readiness, market data, paper state and backtest
+- [x] Add read-only multi-cycle PAPER/Testnet soak runner with fail-closed mode and credential checks
+- [x] Make the base Docker Compose override the host SQLite URL with the internal PostgreSQL URL

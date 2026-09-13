@@ -59,4 +59,22 @@ Copy-Item .env.example .env
 docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml up -d --build
 ```
 
+Para iniciar o Testnet, preencha apenas no `.env` local (que não é versionado)
+as credenciais da Binance Spot Testnet e troque o modo:
+
+```dotenv
+TRADING_MODE=testnet
+BINANCE_TESTNET=true
+LIVE_TRADING_ENABLED=false
+BINANCE_API_KEY=chave_testnet
+BINANCE_API_SECRET=segredo_testnet
+ALLOWED_ORIGINS=http://localhost:4173,http://127.0.0.1:4173
+```
+
+Depois reinicie com o mesmo comando Docker e confira `/ready`: ele deve mostrar
+`mode=testnet` e `account_configured=true`. O worker usa a mesma sequência de
+estratégia, risco, idempotência, User Data Stream e reconciliação, mas as ordens
+são aceitas somente pelo endpoint Testnet. Não use chaves de produção neste
+modo e não altere `LIVE_TRADING_ENABLED` durante esta fase.
+
 Consulte [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md), [TODO.md](TODO.md) e a documentação em `docs/` antes de configurar credenciais Testnet. Nenhuma chave é necessária para o modo PAPER.
