@@ -15,6 +15,18 @@ type BotStatus = 'POSITION OPEN' | 'SCANNING' | 'WAITING' | 'HALTED' | 'NOT DEPL
 type Tone = 'cyan' | 'violet' | 'amber' | 'red'
 type FeedStatus = 'websocket' | 'rest' | 'offline'
 type AccountStatus = 'loading' | 'connected' | 'not-configured' | 'error'
+type AccountSummary = {
+  configured: boolean
+  connected: boolean
+  mode?: string
+  symbol?: string
+  base_asset?: string
+  quote_asset?: string
+  base_total?: number
+  quote_total?: number
+  mark_price?: number
+  account_value_quote?: number
+}
 type BacktestMetrics = {
   equity: number
   return_percent: number
@@ -72,7 +84,10 @@ type PaperSummary = {
   symbol?: string
   interval?: string
   equity: number
+  starting_equity?: number
   daily_pnl: number
+  unrealized_pnl?: number
+  total_pnl?: number
   drawdown_percent: number
   open_positions: number
   allocation_percent?: number
@@ -137,6 +152,11 @@ function formatSignedUsd(value: number | null | undefined) {
 function formatSignedPercent(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   return `${value < 0 ? '' : '+'}${value.toFixed(2)}%`
+}
+
+function formatAsset(value: number | null | undefined, maximumFractionDigits = 8) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return value.toLocaleString('en-US', { maximumFractionDigits })
 }
 
 function buildDeskBots(summary: PaperSummary | null, hardStopped: boolean): DeskBot[] {
@@ -315,6 +335,7 @@ function App() {
   const [livePrices, setLivePrices] = useState<Record<string, number>>({})
   const [feedStatus, setFeedStatus] = useState<FeedStatus>('offline')
   const [accountStatus, setAccountStatus] = useState<AccountStatus>('loading')
+  const [accountSummary, setAccountSummary] = useState<AccountSummary | null>(null)
   const [backtestMetrics, setBacktestMetrics] = useState<BacktestMetrics | null>(null)
   const [backtestMeta, setBacktestMeta] = useState<BacktestMeta | null>(null)
   const [backtestSplits, setBacktestSplits] = useState<BacktestSplit[]>([])
@@ -388,10 +409,16 @@ function App() {
   }, [])
   useEffect(() => {
     const apiUrl = runtimeApiUrl()
-    fetch(`${apiUrl}/api/account/summary`, { cache: 'no-store' })
-      .then(async (response) => response.ok ? await response.json() as { connected?: boolean; configured?: boolean } : Promise.reject(new Error('account request failed')))
-      .then((payload) => setAccountStatus(payload.connected ? 'connected' : payload.configured ? 'error' : 'not-configured'))
-      .catch(() => setAccountStatus('error'))
+    const loadAccount = () => fetch(`${apiUrl}/api/account/summary`, { cache: 'no-store' })
+      .then(async (response) => response.ok ? await response.json() as AccountSummary : Promise.reject(new Error('account request failed')))
+      .then((payload) => {
+        setAccountSummary(payload)
+        setAccountStatus(payload.connected ? 'connected' : payload.configured ? 'error' : 'not-configured')
+      })
+      .catch(() => { setAccountSummary(null); setAccountStatus('error') })
+    void loadAccount()
+    const timer = window.setInterval(loadAccount, 15000)
+    return () => window.clearInterval(timer)
   }, [])
   useEffect(() => {
     const apiUrl = runtimeApiUrl()
@@ -499,7 +526,7 @@ function App() {
 
       <div className="content">
         <div className="page-heading"><div><p className="section-kicker">SALA DE OPERAÇÕES · BINANCE SPOT · DADOS PÚBLICOS</p><h1>{activePage === 'operations' ? 'Sala de Operações' : navItems.find((item) => item.id === activePage)?.label}</h1><p className="heading-sub">{activePage === 'operations' ? `${engineHeadline}. Cinco estações visuais transparentes.` : 'Observe e valide cada decisão dentro dos limites de segurança.'}</p></div><div className="heading-controls"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar robô..." aria-label="Buscar robô" /></div><div className="mode-select"><span className="mode-dot" />{modeLabel} · LIVE BLOQUEADO<ChevronRight size={14} /></div></div></div>
-        <div className="stats-row"><StatCard label={`${modeLabel} equity · real market`} value={paperSummary ? `$ ${paperSummary.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'} detail={paperSummary?.status === 'running' ? 'Engine · Binance closed candles' : runtimeIssue ? 'Trading paused by safety gate' : 'Engine warming up'} icon={WalletCards} /><StatCard label={`${modeLabel} realized PnL`} value={formatSignedUsd(paperSummary?.daily_pnl)} detail={paperSummary?.status === 'running' ? `Since ${modeLabel.toLowerCase()} session start` : runtimeIssue ? 'Awaiting account validation' : `Awaiting ${engineLabel.toLowerCase()}`} tone="cyan" icon={CircleDollarSign} /><StatCard label={`${modeLabel} drawdown`} value={paperSummary ? `${paperSummary.drawdown_percent.toFixed(2)}%` : '—'} detail={`Risk limit · ${(riskConfig?.hard_drawdown_limit_percent ?? 5).toFixed(2)}%`} tone="red" icon={Gauge} /><StatCard label="Bots online · local" value={`${botsOnline} / ${bots.length}`} detail="Only deployed engines count as online" tone="amber" icon={Bot} /><button className={`stop-button ${hardStopped ? 'is-stopped' : ''}`} onClick={hardStopped ? () => setHardStopped(false) : stopAll}><Square size={17} fill="currentColor" />{hardStopped ? 'HARD STOP ACTIVE' : 'PARAR TODOS OS ROBÔS'}</button></div>
+        <div className="stats-row"><StatCard label="Saldo Spot · BTC/USDT" value={accountSummary?.account_value_quote !== undefined ? `$ ${accountSummary.account_value_quote.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'} detail={accountSummary ? `${formatAsset(accountSummary.base_total)} ${accountSummary.base_asset ?? 'BTC'} · ${formatAsset(accountSummary.quote_total, 2)} ${accountSummary.quote_asset ?? 'USDT'}` : accountStatus === 'error' ? 'Saldo indisponível' : 'Consultando Binance'} icon={WalletCards} /><StatCard label={`${modeLabel} equity · robô`} value={paperSummary ? `$ ${paperSummary.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'} detail={paperSummary?.status === 'running' ? 'Estado marcado pelo worker' : runtimeIssue ? 'Trading pausado pelo risco' : 'Engine aquecendo'} icon={Bot} /><StatCard label={`${modeLabel} PnL total`} value={formatSignedUsd(paperSummary?.total_pnl ?? paperSummary?.daily_pnl)} detail={paperSummary ? `Realizado ${formatSignedUsd(paperSummary.daily_pnl)} · aberto ${formatSignedUsd(paperSummary.unrealized_pnl)}` : 'Aguardando dados'} tone="cyan" icon={CircleDollarSign} /><StatCard label={`${modeLabel} drawdown`} value={paperSummary ? `${paperSummary.drawdown_percent.toFixed(2)}%` : '—'} detail={`Risk limit · ${(riskConfig?.hard_drawdown_limit_percent ?? 5).toFixed(2)}%`} tone="red" icon={Gauge} /><button className={`stop-button ${hardStopped ? 'is-stopped' : ''}`} onClick={hardStopped ? () => setHardStopped(false) : stopAll}><Square size={17} fill="currentColor" />{hardStopped ? 'HARD STOP ACTIVE' : 'PARAR TODOS OS ROBÔS'}</button></div>
 
       <PageWorkspace page={activePage} bots={bots} botsOnline={botsOnline} onSelect={selectBot} backtest={backtestMetrics} backtestMeta={backtestMeta} backtestState={backtestState} backtestSplits={backtestSplits} parameterSweepCount={parameterSweepCount} walkForwardFolds={walkForwardFolds} paperSummary={paperSummary} systemMetrics={systemMetrics} riskConfig={riskConfig} equityPoints={equityPoints} paperActivities={paperActivities} />
         {activePage === 'operations' && <div className="operations-grid">

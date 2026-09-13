@@ -541,11 +541,32 @@ def account_summary(response: Response) -> dict[str, object]:
             if isinstance(row, dict) and float(row.get("free", 0)) + float(row.get("locked", 0)) > 0
         ]
         save_account_balances(balances)
+        balance_by_asset = {
+            str(balance["asset"]).upper(): float(balance["free"]) + float(balance["locked"])
+            for balance in balances
+        }
+        base_asset = "BTC"
+        quote_asset = "USDT"
+        mark_price: float | None = None
+        try:
+            mark_price = account_client.ticker_price([f"{base_asset}{quote_asset}"])[0].price
+        except Exception:
+            # Keep the raw account balances visible even when the mark price is temporarily unavailable.
+            pass
+        base_total = balance_by_asset.get(base_asset, 0.0)
+        quote_total = balance_by_asset.get(quote_asset, 0.0)
         return {
             "configured": True,
             "connected": True,
             "mode": settings.trading_mode,
             "balances": balances,
+            "symbol": f"{base_asset}{quote_asset}",
+            "base_asset": base_asset,
+            "quote_asset": quote_asset,
+            "base_total": base_total,
+            "quote_total": quote_total,
+            "mark_price": mark_price,
+            "account_value_quote": quote_total + base_total * mark_price if mark_price else quote_total,
         }
     except Exception:
         return {

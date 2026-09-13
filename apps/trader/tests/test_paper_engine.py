@@ -90,6 +90,9 @@ def test_engine_restores_exchange_state_and_applies_stream_fill_once():
     engine.restore_account_state(cash=500, quantity=2, entry_price=90, mark_price=100)
 
     assert engine.snapshot()["equity"] == 700
+    assert engine.snapshot()["starting_equity"] == 700
+    assert engine.snapshot()["unrealized_pnl"] == 20
+    assert engine.snapshot()["total_pnl"] == 20
 
     intent = TradeIntent(
         "ema-btc-01",

@@ -466,7 +466,10 @@ class TestnetRuntime:
         try:
             save_paper_snapshot(
                 equity=float(snapshot["equity"]),
+                starting_equity=float(snapshot["starting_equity"]),
                 daily_pnl=float(snapshot["realized_pnl"]),
+                unrealized_pnl=float(snapshot["unrealized_pnl"]),
+                total_pnl=float(snapshot["total_pnl"]),
                 drawdown_percent=float(snapshot["drawdown_percent"]),
                 open_positions=int(snapshot["open_positions"]),
                 mode="testnet",
@@ -496,7 +499,10 @@ class TestnetRuntime:
             "symbol": self.symbol,
             "interval": self.interval,
             "equity": float(snapshot["equity"]),
+            "starting_equity": float(snapshot["starting_equity"]),
             "daily_pnl": float(snapshot["realized_pnl"]),
+            "unrealized_pnl": float(snapshot["unrealized_pnl"]),
+            "total_pnl": float(snapshot["total_pnl"]),
             "drawdown_percent": -float(snapshot["drawdown_percent"]),
             "open_positions": int(snapshot["open_positions"]),
             "allocation_percent": float(snapshot["allocation_percent"]),

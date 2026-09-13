@@ -103,7 +103,10 @@ def save_candles(
 def save_paper_snapshot(
     *,
     equity: float,
+    starting_equity: float | None = None,
     daily_pnl: float,
+    unrealized_pnl: float = 0.0,
+    total_pnl: float | None = None,
     drawdown_percent: float,
     open_positions: int,
     mode: str = "paper",
@@ -125,7 +128,10 @@ def save_paper_snapshot(
         session.add(
             PortfolioSnapshotRecord(
                 equity=equity,
+                starting_equity=starting_equity if starting_equity is not None else equity,
                 daily_pnl=daily_pnl,
+                unrealized_pnl=unrealized_pnl,
+                total_pnl=total_pnl if total_pnl is not None else daily_pnl + unrealized_pnl,
                 open_positions=open_positions,
                 drawdown_percent=drawdown_percent,
                 mode=mode,
@@ -528,7 +534,10 @@ def latest_runtime_summary(mode: str = "paper") -> dict[str, object] | None:
             "symbol": configured_symbol,
             "interval": configured_interval,
             "equity": float(row.equity),
+            "starting_equity": float(row.starting_equity),
             "daily_pnl": float(row.daily_pnl),
+            "unrealized_pnl": float(row.unrealized_pnl),
+            "total_pnl": float(row.total_pnl),
             "drawdown_percent": -abs(float(row.drawdown_percent)),
             "open_positions": int(row.open_positions),
             "allocation_percent": float(row.allocation_percent),

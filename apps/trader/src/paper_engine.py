@@ -73,6 +73,7 @@ class PaperEngine:
         self.fees_paid = 0.0
         self.last_price = self.config.starting_cash
         self.peak_equity = self.config.starting_cash
+        self.starting_equity = self.config.starting_cash
         self.processed_signals: set[int] = set()
         self.events: list[PaperEvent] = []
         self._orders_by_client_id: dict[str, tuple[TradeIntent, PaperOrder]] = {}
@@ -210,6 +211,7 @@ class PaperEngine:
         self.closed_trade_pnls = []
         self.fees_paid = 0.0
         self.last_price = mark_price
+        self.starting_equity = self.equity
         self.peak_equity = self.equity
         self.stop_price = None
         self.take_profit_price = None
@@ -269,9 +271,15 @@ class PaperEngine:
 
     def snapshot(self) -> dict[str, float | int]:
         closed_trades = len(self.closed_trade_pnls)
+        unrealized_pnl = (
+            (self.last_price - self.entry_price) * self.quantity if self.quantity else 0.0
+        )
         return {
             "equity": self.equity,
+            "starting_equity": self.starting_equity,
             "realized_pnl": self.realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "total_pnl": self.realized_pnl + unrealized_pnl,
             "fees": self.fees_paid,
             "open_positions": 1 if self.quantity > 0 else 0,
             "allocation_percent": self.portfolio.total_exposure_percent,

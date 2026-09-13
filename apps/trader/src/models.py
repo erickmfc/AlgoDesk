@@ -109,7 +109,10 @@ class PortfolioSnapshotRecord(Base):
     __tablename__ = "portfolio_snapshots"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     equity: Mapped[float] = mapped_column(Float)
+    starting_equity: Mapped[float] = mapped_column(Float, default=0)
     daily_pnl: Mapped[float] = mapped_column(Float, default=0)
+    unrealized_pnl: Mapped[float] = mapped_column(Float, default=0)
+    total_pnl: Mapped[float] = mapped_column(Float, default=0)
     open_positions: Mapped[int] = mapped_column(Integer, default=0)
     drawdown_percent: Mapped[float] = mapped_column(Float)
     mode: Mapped[str] = mapped_column(String(16), default="paper")
