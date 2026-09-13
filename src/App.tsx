@@ -26,6 +26,14 @@ type AccountSummary = {
   quote_total?: number
   mark_price?: number
   account_value_quote?: number
+  wallet_value_quote?: number
+  wallet_asset_count?: number
+  wallet_valuation_complete?: boolean
+  wallet_assets?: Array<{
+    asset: string
+    total: number
+    value_quote?: number | null
+  }>
 }
 type BacktestMetrics = {
   equity: number
@@ -157,6 +165,13 @@ function formatSignedPercent(value: number | null | undefined) {
 function formatAsset(value: number | null | undefined, maximumFractionDigits = 8) {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   return value.toLocaleString('en-US', { maximumFractionDigits })
+}
+
+function formatWalletAssets(account: AccountSummary | null) {
+  if (!account?.wallet_assets?.length) return account?.connected ? 'Nenhum ativo com saldo' : 'Consultando Binance'
+  const visible = account.wallet_assets.slice(0, 2).map((asset) => `${formatAsset(asset.total)} ${asset.asset}`)
+  const remaining = account.wallet_assets.length - visible.length
+  return `${visible.join(' · ')}${remaining > 0 ? ` · +${remaining} ativos` : ''}`
 }
 
 function buildDeskBots(summary: PaperSummary | null, hardStopped: boolean): DeskBot[] {

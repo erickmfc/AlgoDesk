@@ -548,13 +548,42 @@ def account_summary(response: Response) -> dict[str, object]:
         base_asset = "BTC"
         quote_asset = "USDT"
         mark_price: float | None = None
+        ticker_by_symbol: dict[str, float] = {}
         try:
-            mark_price = account_client.ticker_price([f"{base_asset}{quote_asset}"])[0].price
+            ticker_by_symbol = {
+                ticker.symbol.upper(): ticker.price
+                for ticker in account_client.all_ticker_prices()
+            }
+            mark_price = ticker_by_symbol.get(f"{base_asset}{quote_asset}")
         except Exception:
             # Keep the raw account balances visible even when the mark price is temporarily unavailable.
             pass
         base_total = balance_by_asset.get(base_asset, 0.0)
         quote_total = balance_by_asset.get(quote_asset, 0.0)
+        wallet_assets: list[dict[str, object]] = []
+        wallet_value_quote = 0.0
+        unpriced_assets: list[str] = []
+        for balance in balances:
+            asset = str(balance["asset"]).upper()
+            total = float(balance["free"]) + float(balance["locked"])
+            if asset == quote_asset:
+                asset_value_quote = total
+                asset_mark_price = 1.0
+            else:
+                asset_mark_price = ticker_by_symbol.get(f"{asset}{quote_asset}")
+                asset_value_quote = total * asset_mark_price if asset_mark_price is not None else None
+            if asset_value_quote is None:
+                unpriced_assets.append(asset)
+            else:
+                wallet_value_quote += asset_value_quote
+            wallet_assets.append(
+                {
+                    "asset": asset,
+                    "total": total,
+                    "mark_price": asset_mark_price,
+                    "value_quote": asset_value_quote,
+                }
+            )
         return {
             "configured": True,
             "connected": True,
@@ -567,6 +596,11 @@ def account_summary(response: Response) -> dict[str, object]:
             "quote_total": quote_total,
             "mark_price": mark_price,
             "account_value_quote": quote_total + base_total * mark_price if mark_price else quote_total,
+            "wallet_value_quote": wallet_value_quote,
+            "wallet_assets": wallet_assets,
+            "wallet_asset_count": len(wallet_assets),
+            "wallet_unpriced_assets": unpriced_assets,
+            "wallet_valuation_complete": not unpriced_assets,
         }
     except Exception:
         return {
