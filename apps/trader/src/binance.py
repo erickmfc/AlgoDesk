@@ -5,8 +5,10 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -21,6 +23,27 @@ class Ticker:
     price: float
 
 
+def _read_json(request: Request, timeout: float, *, retry_rate_limit: bool = True) -> Any:
+    """Read one Binance response, backing off only for retry-safe 429 reads."""
+    attempts = 0
+    delay = 0.5
+    while True:
+        try:
+            with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
+                return json.load(response)
+        except HTTPError as exc:
+            if exc.code != 429 or not retry_rate_limit or attempts >= 2:
+                raise
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            try:
+                wait_seconds = float(retry_after) if retry_after is not None else delay
+            except (TypeError, ValueError):
+                wait_seconds = delay
+            time.sleep(min(max(wait_seconds, delay), 8.0))
+            attempts += 1
+            delay = min(delay * 2, 8.0)
+
+
 class BinancePublicClient:
     def __init__(self, base_url: str = "https://api.binance.com") -> None:
         self.base_url = base_url.rstrip("/")
@@ -32,8 +55,7 @@ class BinancePublicClient:
         request = Request(
             f"{self.base_url}/api/v3/ticker/price?{query}", headers={"User-Agent": "AlgoDesk/0.1"}
         )
-        with urlopen(request, timeout=8) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
-            payload = json.load(response)
+        payload = _read_json(request, 8)
         if isinstance(payload, dict):
             payload = [payload]
         return [Ticker(str(row["symbol"]), float(row["price"])) for row in payload]
@@ -43,8 +65,7 @@ class BinancePublicClient:
         request = Request(
             f"{self.base_url}/api/v3/exchangeInfo?{query}", headers={"User-Agent": "AlgoDesk/0.1"}
         )
-        with urlopen(request, timeout=8) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
-            return json.load(response)
+        return _read_json(request, 8)
 
     def klines(self, symbol: str, interval: str = "1h", limit: int = 500) -> list[Candle]:
         bounded_limit = min(max(int(limit), 1), 1000)
@@ -52,8 +73,7 @@ class BinancePublicClient:
         request = Request(
             f"{self.base_url}/api/v3/klines?{query}", headers={"User-Agent": "AlgoDesk/0.1"}
         )
-        with urlopen(request, timeout=12) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
-            payload = json.load(response)
+        payload = _read_json(request, 12)
         if not isinstance(payload, list):
             raise ValueError("unexpected Binance klines response")
         candles: list[Candle] = []
@@ -102,8 +122,7 @@ class BinancePublicClient:
                 f"{self.base_url}/api/v3/klines?{query}",
                 headers={"User-Agent": "AlgoDesk/0.1"},
             )
-            with urlopen(request, timeout=12) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
-                payload = json.load(response)
+            payload = _read_json(request, 12)
             page = [
                 Candle(
                     int(row[0]),
@@ -255,8 +274,7 @@ class BinancePrivateClient(BinancePublicClient):
             headers={"User-Agent": "AlgoDesk/0.1", "X-MBX-APIKEY": self.api_key},
             method=method,
         )
-        with urlopen(request, timeout=8) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
-            return json.load(response)
+        return _read_json(request, 8, retry_rate_limit=method.upper() == "GET")
 
     def _api_key_request(
         self, method: str, path: str, params: Mapping[str, object] | None = None
@@ -270,12 +288,13 @@ class BinancePrivateClient(BinancePublicClient):
             headers={"User-Agent": "AlgoDesk/0.1", "X-MBX-APIKEY": self.api_key},
             method=method,
         )
-        with urlopen(request, timeout=8) as response:  # noqa: S310 - fixed Binance HTTPS endpoint
-            return json.load(response)
+        return _read_json(request, 8, retry_rate_limit=False)
 
 
 class BinanceUserDataStream:
     """Authenticated account-event stream; it never submits trading commands."""
+
+    requires_listen_key = True
 
     def __init__(self, base_url: str = "wss://stream.binance.com:9443/ws") -> None:
         self.base_url = base_url.rstrip("/")
@@ -286,7 +305,14 @@ class BinanceUserDataStream:
     def stream_url(self, listen_key: str) -> str:
         return f"{self.base_url}/{listen_key}"
 
-    async def iter_events(self, listen_key: str, on_reconnect=None):
+    async def iter_events(
+        self,
+        listen_key: str | None,
+        on_reconnect: Callable[[], Awaitable[None]] | None = None,
+        on_connected: Callable[[], Awaitable[None]] | None = None,
+    ):
+        if not listen_key:
+            raise ValueError("a listen key is required for the legacy user stream")
         reconnect_delay = 1.0
         while True:
             try:
@@ -299,11 +325,106 @@ class BinanceUserDataStream:
                 ) as socket:
                     self.connected = True
                     reconnect_delay = 1.0
+                    if on_connected is not None:
+                        await on_connected()
                     async for raw_message in socket:
                         payload = json.loads(raw_message)
                         if isinstance(payload, dict):
                             self.last_message_at = time.time()
                             yield payload
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.connected = False
+                self.reconnects += 1
+                if on_reconnect is not None:
+                    await on_reconnect()
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, 30.0)
+
+
+class BinanceWebSocketUserDataStream:
+    """Spot Testnet account stream using Binance's authenticated WebSocket API."""
+
+    requires_listen_key = False
+
+    def __init__(self, api_key: str, api_secret: str, base_url: str) -> None:
+        self.api_key = api_key.strip()
+        self.api_secret = api_secret
+        self.base_url = base_url.rstrip("/")
+        self.reconnects = 0
+        self.connected = False
+        self.last_message_at: float | None = None
+
+    def subscription_payload(self, *, request_id: str, timestamp: int) -> dict[str, object]:
+        params: dict[str, object] = {
+            "apiKey": self.api_key,
+            "recvWindow": 5000,
+            "timestamp": timestamp,
+        }
+        query = urlencode(sorted(params.items()))
+        params["signature"] = hmac.new(
+            self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return {
+            "id": request_id,
+            "method": "userDataStream.subscribe.signature",
+            "params": params,
+        }
+
+    async def iter_events(
+        self,
+        _listen_key: str | None,
+        on_reconnect: Callable[[], Awaitable[None]] | None = None,
+        on_connected: Callable[[], Awaitable[None]] | None = None,
+    ):
+        reconnect_delay = 1.0
+        while True:
+            try:
+                try:
+                    connection = websockets.connect(
+                        self.base_url,
+                        additional_headers={"X-MBX-APIKEY": self.api_key},
+                        ping_interval=20,
+                        ping_timeout=20,
+                        close_timeout=5,
+                        max_size=2**20,
+                    )
+                except TypeError:
+                    # Older websockets releases call this argument extra_headers.
+                    connection = websockets.connect(
+                        self.base_url,
+                        extra_headers={"X-MBX-APIKEY": self.api_key},
+                        ping_interval=20,
+                        ping_timeout=20,
+                        close_timeout=5,
+                        max_size=2**20,
+                    )
+                async with connection as socket:
+                    reconnect_delay = 1.0
+                    await socket.send(
+                        json.dumps(
+                            self.subscription_payload(
+                                request_id=f"algodesk-{int(time.time() * 1000)}",
+                                timestamp=int(time.time() * 1000),
+                            )
+                        )
+                    )
+                    response = json.loads(await asyncio.wait_for(socket.recv(), timeout=10))
+                    if not isinstance(response, dict) or response.get("status") != 200:
+                        raise RuntimeError("Binance Testnet user stream subscription failed")
+                    self.connected = True
+                    if on_connected is not None:
+                        await on_connected()
+                    async for raw_message in socket:
+                        payload = json.loads(raw_message)
+                        if not isinstance(payload, dict):
+                            continue
+                        event = payload.get("event")
+                        if isinstance(event, dict):
+                            self.last_message_at = time.time()
+                            yield event
+                    self.connected = False
             except asyncio.CancelledError:
                 raise
             except Exception:

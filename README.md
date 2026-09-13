@@ -37,6 +37,10 @@ Copy-Item .env.example .env
 docker compose -f docker-compose.yml -f deploy/docker-compose.local.yml up -d --build
 ```
 
+Os atalhos equivalentes para operadores com GNU Make ficam no `Makefile`:
+`make up`, `make verify`, `make soak`, `make backtest`, `make paper`, `make
+reconcile`, `make diagnose` e `make backup`.
+
 ## O que é real e o que é PAPER
 
 - Os preços BTCUSDT e ETHUSDT mostrados no painel vêm do endpoint público Spot da Binance, são atualizados a cada 15 segundos e ficam como `—` quando a origem não responde.
@@ -76,6 +80,11 @@ Depois reinicie com o mesmo comando Docker e confira `/ready`: ele deve mostrar
 estratégia, risco, idempotência, User Data Stream e reconciliação, mas as ordens
 são aceitas somente pelo endpoint Testnet. Não use chaves de produção neste
 modo e não altere `LIVE_TRADING_ENABLED` durante esta fase.
+
+Se a conta Testnet tiver o saldo BTC virtual pré-semeado sem `myTrades`, o
+worker o marca no primeiro preço Spot observado e zera o PnL da sessão; isso
+não inventa um custo histórico. Fills existentes que não reproduzam o saldo
+mantêm o hard stop até a reconciliação.
 
 Consulte [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md), [TODO.md](TODO.md) e a documentação em `docs/` antes de configurar credenciais Testnet. Nenhuma chave é necessária para o modo PAPER.
 

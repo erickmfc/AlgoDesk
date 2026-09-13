@@ -118,6 +118,8 @@ def save_paper_snapshot(
     last_error: str | None = None,
     cycles: int = 0,
     errors: int = 0,
+    reconciliation_status: str | None = None,
+    last_reconciliation_at: datetime | None = None,
 ) -> None:
     with SessionLocal() as session:
         session.add(
@@ -138,10 +140,28 @@ def save_paper_snapshot(
                 last_error=last_error,
                 cycles=cycles,
                 errors=errors,
+                reconciliation_status=reconciliation_status,
+                last_reconciliation_at=last_reconciliation_at,
                 captured_at=datetime.now(timezone.utc),
             )
         )
         session.commit()
+
+
+def update_latest_runtime_reconciliation(mode: str, status: str, reconciled_at: datetime) -> bool:
+    """Persist a read-only reconciliation result on the latest runtime snapshot."""
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(PortfolioSnapshotRecord)
+            .where(PortfolioSnapshotRecord.mode == mode)
+            .order_by(PortfolioSnapshotRecord.captured_at.desc())
+        )
+        if row is None:
+            return False
+        row.reconciliation_status = status
+        row.last_reconciliation_at = reconciled_at
+        session.commit()
+        return True
 
 
 def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
@@ -430,13 +450,16 @@ def latest_account_balances() -> dict[str, float]:
         return {row.asset: row.free + row.locked for row in rows}
 
 
-def local_open_order_ids() -> set[str]:
+def local_open_order_ids(mode: str = "paper") -> set[str]:
+    """Return open client order ids for one execution mode."""
+    prefix = f"{mode.upper()}-"
     with SessionLocal() as session:
         rows = session.scalars(
             select(OrderRecord.client_order_id).where(
+                OrderRecord.order_id.like(f"{prefix}%"),
                 OrderRecord.status.in_(
                     ("CREATED", "RISK_APPROVED", "SUBMITTING", "SUBMITTED", "PARTIALLY_FILLED")
-                )
+                ),
             )
         ).all()
         return set(rows)
@@ -481,6 +504,15 @@ def runtime_order_metrics(mode: str = "paper") -> dict[str, int]:
 
 def latest_runtime_summary(mode: str = "paper") -> dict[str, object] | None:
     """Read the last worker snapshot so the API process stays stateless."""
+    try:
+        from .config_loader import paper_engine_config_from_yaml
+
+        configured = paper_engine_config_from_yaml()
+        configured_symbol = configured.symbol
+        configured_interval = configured.interval
+    except Exception:
+        configured_symbol = "BTCUSDT"
+        configured_interval = "1h"
     with SessionLocal() as session:
         row = session.scalar(
             select(PortfolioSnapshotRecord)
@@ -493,8 +525,8 @@ def latest_runtime_summary(mode: str = "paper") -> dict[str, object] | None:
             "source": row.source,
             "mode": row.mode,
             "status": row.status,
-            "symbol": "BTCUSDT",
-            "interval": "1h",
+            "symbol": configured_symbol,
+            "interval": configured_interval,
             "equity": float(row.equity),
             "daily_pnl": float(row.daily_pnl),
             "drawdown_percent": -abs(float(row.drawdown_percent)),
@@ -510,6 +542,10 @@ def latest_runtime_summary(mode: str = "paper") -> dict[str, object] | None:
             "cycles": int(row.cycles),
             "hard_stop": bool(row.hard_stop),
             "errors": int(row.errors),
+            "reconciliation_status": row.reconciliation_status or "NOT_CONFIGURED",
+            "last_reconciliation_at": (
+                row.last_reconciliation_at.isoformat() if row.last_reconciliation_at else None
+            ),
         }
 
 

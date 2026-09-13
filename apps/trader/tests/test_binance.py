@@ -1,5 +1,8 @@
+import hashlib
+import hmac
 import io
 import json
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 
 from src.binance import (
@@ -7,6 +10,7 @@ from src.binance import (
     BinancePrivateClient,
     BinancePublicClient,
     BinanceUserDataStream,
+    BinanceWebSocketUserDataStream,
 )
 
 
@@ -23,6 +27,28 @@ def test_public_ticker_maps_symbol_and_price(monkeypatch):
     monkeypatch.setattr("src.binance.urlopen", lambda *_args, **_kwargs: FakeResponse(payload))
     result = BinancePublicClient("https://example.test").ticker_price(["BTCUSDT"])
     assert result[0].symbol == "BTCUSDT"
+    assert result[0].price == 62340.10
+
+
+def test_public_reads_backoff_on_rate_limit(monkeypatch):
+    payload = json.dumps([{"symbol": "BTCUSDT", "price": "62340.10"}]).encode()
+    calls = 0
+
+    def fake_urlopen(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError(
+                "https://example.test", 429, "rate limited", {"Retry-After": "0"}, io.BytesIO()
+            )
+        return FakeResponse(payload)
+
+    monkeypatch.setattr("src.binance.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.binance.time.sleep", lambda _seconds: None)
+
+    result = BinancePublicClient("https://example.test").ticker_price(["BTCUSDT"])
+
+    assert calls == 2
     assert result[0].price == 62340.10
 
 
@@ -83,3 +109,16 @@ def test_user_data_stream_uses_listen_key_url():
         BinanceUserDataStream("wss://example.test/ws").stream_url("listen-key")
         == "wss://example.test/ws/listen-key"
     )
+
+
+def test_testnet_user_data_stream_signs_websocket_subscription():
+    stream = BinanceWebSocketUserDataStream(
+        "public-key", "private-secret", "wss://example.test/ws-api/v3"
+    )
+    payload = stream.subscription_payload(request_id="request-1", timestamp=1700000000000)
+    params = payload["params"]
+    assert payload["method"] == "userDataStream.subscribe.signature"
+    assert isinstance(params, dict)
+    query = "apiKey=public-key&recvWindow=5000&timestamp=1700000000000"
+    expected = hmac.new(b"private-secret", query.encode(), hashlib.sha256).hexdigest()
+    assert params["signature"] == expected

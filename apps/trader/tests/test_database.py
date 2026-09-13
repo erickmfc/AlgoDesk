@@ -135,3 +135,38 @@ def test_save_paper_events_upserts_replayed_order_state(monkeypatch):
     assert order is not None and order.status == "FILLED"
     assert len(fills) == 1 and fills[0].quantity == 0.01
     assert len(events) == 2 and events[-1].status == "FILLED"
+
+
+def test_local_open_order_ids_are_scoped_by_mode(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    with sessions() as session:
+        session.add_all(
+            [
+                OrderRecord(
+                    order_id="PAPER-paper-order",
+                    client_order_id="paper-client",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    status="SUBMITTED",
+                    raw_response="{}",
+                    updated_at=now,
+                ),
+                OrderRecord(
+                    order_id="TESTNET-testnet-order",
+                    client_order_id="testnet-client",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    status="SUBMITTED",
+                    raw_response="{}",
+                    updated_at=now,
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(database, "SessionLocal", sessions)
+
+    assert database.local_open_order_ids("paper") == {"paper-client"}
+    assert database.local_open_order_ids("testnet") == {"testnet-client"}

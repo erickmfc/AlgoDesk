@@ -40,6 +40,7 @@ from .database import (
     runtime_order_metrics,
     save_account_balances,
     save_candles,
+    update_latest_runtime_reconciliation,
 )
 from .filters import SymbolFilters
 from .monitoring import configure_logging
@@ -332,6 +333,12 @@ def paper_kill_switch(request: PaperKillSwitchRequest) -> dict[str, object]:
             raise HTTPException(status_code=503, detail="trader worker is unavailable") from exc
     if not request.enabled and request.confirmation != "ENABLE":
         raise HTTPException(status_code=400, detail="confirmation ENABLE is required")
+    if not request.enabled and settings.trading_mode == "testnet":
+        if not getattr(runtime, "_bootstrapped", True):
+            raise HTTPException(
+                status_code=409,
+                detail="Testnet account bootstrap is incomplete; reconcile the existing position before re-enabling",
+            )
     runtime.set_hard_stop(request.enabled)
     return {
         "status": "HARD_STOP" if request.enabled else "RUNNING",
@@ -347,6 +354,12 @@ def internal_paper_kill_switch(request: PaperKillSwitchRequest) -> dict[str, obj
         raise HTTPException(status_code=409, detail="paper runtime is not active")
     if not request.enabled and request.confirmation != "ENABLE":
         raise HTTPException(status_code=400, detail="confirmation ENABLE is required")
+    if not request.enabled and settings.trading_mode == "testnet":
+        if not getattr(runtime, "_bootstrapped", True):
+            raise HTTPException(
+                status_code=409,
+                detail="Testnet account bootstrap is incomplete; reconcile the existing position before re-enabling",
+            )
     runtime.set_hard_stop(request.enabled)
     return {
         "status": "HARD_STOP" if request.enabled else "RUNNING",
@@ -440,7 +453,7 @@ def system_metrics(response: Response) -> dict[str, object]:
     runtime_errors = runtime_summary.get("errors", 0) if runtime_summary else 0
     error_count = runtime_errors if isinstance(runtime_errors, int) else 0
     runtime_reconciliation_status = (
-        str(runtime_summary.get("reconciliation_status", reconciliation_status))
+        str(runtime_summary.get("reconciliation_status") or reconciliation_status)
         if runtime_summary
         else reconciliation_status
     )
@@ -558,7 +571,7 @@ def account_reconcile(response: Response, symbol: str = "BTCUSDT") -> dict[str, 
         result = AccountReconciler().reconcile(
             account_client,
             local_balances=latest_account_balances(),
-            local_open_order_ids=local_open_order_ids(),
+            local_open_order_ids=local_open_order_ids(settings.trading_mode),
             local_order_ids=local_order_ids(settings.trading_mode),
             local_fill_order_ids=local_fill_order_ids(settings.trading_mode),
             symbol=symbol.upper(),
@@ -573,6 +586,9 @@ def account_reconcile(response: Response, symbol: str = "BTCUSDT") -> dict[str, 
         last_reconciliation_at = datetime.now(timezone.utc)
         reconciliation_status = result.status
         reconciliation_error = None
+        update_latest_runtime_reconciliation(
+            settings.trading_mode, result.status, last_reconciliation_at
+        )
         return {
             "status": result.status,
             "balance_mismatches": result.balance_mismatches,

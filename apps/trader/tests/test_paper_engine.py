@@ -3,7 +3,7 @@ from src.core import OrderSide, OrderStatus, PaperOrder, RiskConfig, RiskEngine,
 from src.paper_engine import PaperEngine, PaperEngineConfig
 from src.paper_runtime import PaperRuntime
 from src.strategies import Candle
-from src.testnet_runtime import reconstructed_entry_price
+from src.testnet_runtime import bootstrap_entry_price, reconstructed_entry_price
 
 
 def test_paper_engine_routes_signal_through_risk_and_order_manager():
@@ -167,3 +167,16 @@ def test_testnet_position_restore_rebuilds_average_cost_from_fills():
     )
 
     assert entry == 110
+
+
+def test_testnet_bootstrap_marks_seeded_balance_without_trade_history():
+    entry = bootstrap_entry_price(
+        [],
+        expected_quantity=0.5,
+        base_asset="BTC",
+        quote_asset="USDT",
+        tolerance=1e-8,
+        mark_price=50_000,
+    )
+
+    assert entry == 50_000

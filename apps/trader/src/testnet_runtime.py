@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .account_stream import UserDataStreamManager
-from .binance import BinancePrivateClient, BinancePublicClient, BinanceUserDataStream
+from .binance import (
+    BinancePrivateClient,
+    BinancePublicClient,
+    BinanceWebSocketUserDataStream,
+)
 from .config_loader import paper_engine_config_from_yaml, risk_config_from_yaml
 from .core import RiskEngine
 from .database import (
@@ -83,6 +87,38 @@ def reconstructed_entry_price(
     return cost / quantity if quantity > tolerance else 0.0
 
 
+def bootstrap_entry_price(
+    trades: list[dict[str, object]],
+    *,
+    expected_quantity: float,
+    base_asset: str,
+    quote_asset: str,
+    tolerance: float,
+    mark_price: float,
+) -> float:
+    """Choose a safe cost basis for a Testnet account's initial base balance.
+
+    Binance Spot Testnet seeds new users with virtual balances, but those
+    balances do not necessarily have matching trade history.  Treating an
+    untracked initial balance as a position at the current mark avoids
+    inventing historical PnL while preserving the strict mismatch check for
+    accounts that do have fills we can reconstruct.
+    """
+    if expected_quantity <= tolerance:
+        return 0.0
+    if mark_price <= 0:
+        raise ValueError("Testnet mark price must be positive")
+    if not trades:
+        return mark_price
+    return reconstructed_entry_price(
+        trades,
+        expected_quantity=expected_quantity,
+        base_asset=base_asset,
+        quote_asset=quote_asset,
+        tolerance=tolerance,
+    )
+
+
 @dataclass
 class TestnetRuntime:
     market_client: BinancePublicClient
@@ -120,9 +156,14 @@ class TestnetRuntime:
         self.quote_asset = ""
         self.user_stream = UserDataStreamManager(
             self.account_client,
-            BinanceUserDataStream("wss://stream.testnet.binance.vision/ws"),
+            BinanceWebSocketUserDataStream(
+                self.account_client.api_key,
+                self.account_client.api_secret,
+                "wss://ws-api.testnet.binance.vision/ws-api/v3",
+            ),
             on_account_event=self._on_account_event,
             on_reconnect=self._on_stream_reconnect,
+            on_connected=self._on_stream_connected,
         )
 
     def _engine_config(self, *, starting_cash: float | None = None) -> PaperEngineConfig:
@@ -181,6 +222,8 @@ class TestnetRuntime:
             last_candle_at=self.last_candle_at,
             cycles=self.cycles,
             errors=self.error_count,
+            reconciliation_status=self.reconciliation_status,
+            last_reconciliation_at=self.last_reconciliation_at,
         )
         return {"events": len(events), "reconciliation": self.reconciliation_status}
 
@@ -203,6 +246,14 @@ class TestnetRuntime:
                     event="testnet_cycle_error",
                     error=str(exc),
                 )
+                logger.exception(
+                    "testnet cycle failed",
+                    extra={
+                        "symbol": self.symbol,
+                        "event": "testnet_cycle_error",
+                        "error": str(exc),
+                    },
+                )
             await asyncio.sleep(self.poll_seconds)
 
     async def account_stream_loop(self) -> None:
@@ -216,6 +267,14 @@ class TestnetRuntime:
             self.engine.risk.hard_stop = True
             self.engine.risk.account_synchronized = False
             self._persist_snapshot()
+            logger.exception(
+                "testnet account stream failed",
+                extra={
+                    "symbol": self.symbol,
+                    "event": "testnet_stream_error",
+                    "error": str(exc),
+                },
+            )
 
     async def _on_account_event(self, event: dict[str, object]) -> None:
         event_type = str(event.get("e", ""))
@@ -260,10 +319,21 @@ class TestnetRuntime:
         self.engine.risk.hard_stop = True
         self.engine.risk.account_synchronized = False
         try:
+            await self._reconcile()
+        except Exception as exc:  # noqa: BLE001 - fail closed until a later cycle reconciles
+            self.last_error = str(exc)
+
+    async def _on_stream_connected(self) -> None:
+        if not self._bootstrapped:
+            return
+        try:
             result = await self._reconcile()
             if result.status == "SYNCED":
                 self.engine.risk.hard_stop = False
+                self.last_error = None
         except Exception as exc:  # noqa: BLE001 - fail closed until a later cycle reconciles
+            self.engine.risk.hard_stop = True
+            self.engine.risk.account_synchronized = False
             self.last_error = str(exc)
 
     async def _bootstrap_account(self) -> None:
@@ -317,19 +387,33 @@ class TestnetRuntime:
         mark_price = tickers[0].price
         tolerance = max(float(self.broker.filters[self.symbol].step_size), 1e-8)
         entry_price = 0.0
+        trade_count = 0
         if base_balance > tolerance:
             trades = await asyncio.to_thread(self.account_client.my_trades, self.symbol, 1000)
-            entry_price = reconstructed_entry_price(
+            trade_count = len(trades)
+            entry_price = bootstrap_entry_price(
                 trades,
                 expected_quantity=base_balance,
                 base_asset=self.base_asset,
                 quote_asset=self.quote_asset,
                 tolerance=tolerance,
+                mark_price=mark_price,
             )
         if quote_balance <= 0 and base_balance <= tolerance:
             raise RuntimeError(
                 f"Testnet account has no {self.quote_asset} or {self.base_asset} balance"
             )
+        logger.info(
+            "testnet account bootstrapped",
+            extra={
+                "event": "testnet_account_bootstrapped",
+                "symbol": self.symbol,
+                "error": (
+                    f"base_balance={base_balance:.12g} quote_balance={quote_balance:.12g} "
+                    f"trade_count={trade_count} entry_price={entry_price:.12g}"
+                ),
+            },
+        )
         self.engine = PaperEngine(
             self._engine_config(starting_cash=quote_balance),
             risk=RiskEngine(risk_config_from_yaml()),
@@ -358,7 +442,7 @@ class TestnetRuntime:
             AccountReconciler().reconcile,
             self.account_client,
             local_balances=local_balances,
-            local_open_order_ids=local_open_order_ids(),
+            local_open_order_ids=local_open_order_ids("testnet"),
             local_order_ids=local_order_ids("testnet"),
             local_fill_order_ids=local_fill_order_ids("testnet"),
             symbol=self.symbol,
@@ -394,8 +478,11 @@ class TestnetRuntime:
                 hard_stop=self.engine.risk.hard_stop,
                 last_run_at=self.last_run_at,
                 last_candle_at=self.last_candle_at,
+                last_error=self.last_error,
                 cycles=self.cycles,
                 errors=self.error_count,
+                reconciliation_status=self.reconciliation_status,
+                last_reconciliation_at=self.last_reconciliation_at,
             )
         except Exception as exc:  # noqa: BLE001 - fail-closed risk state stays in memory
             logger.warning("runtime snapshot persistence failed: %s", exc)
@@ -427,6 +514,14 @@ class TestnetRuntime:
             "last_reconciliation_at": self.last_reconciliation_at.isoformat()
             if self.last_reconciliation_at
             else None,
+            "user_stream": {
+                "state": self.user_stream.state,
+                "connected": bool(getattr(self.user_stream.stream, "connected", False)),
+                "reconnects": int(getattr(self.user_stream.stream, "reconnects", 0)),
+                "last_event_at": self.user_stream.last_event_at.isoformat()
+                if self.user_stream.last_event_at
+                else None,
+            },
         }
 
     def _closed_candles(self, candles: list[Candle]) -> list[Candle]:

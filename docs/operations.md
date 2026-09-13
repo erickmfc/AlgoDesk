@@ -65,3 +65,8 @@ python scripts/soak_runtime.py --require-mode testnet --cycles 12 --interval 60
 
 Sem credenciais, o comando termina como `BLOCKED` e não tenta criar ordens.
 Nunca use uma chave de produção no modo Testnet.
+
+Se o Testnet retornar o saldo virtual inicial de BTC sem `myTrades`, o worker
+marca essa posição pelo primeiro preço Spot observado e zera o PnL da sessão;
+isso não representa custo histórico. Se houver fills reais que não reproduzam
+o saldo atual, o worker mantém o hard stop e exige reconciliação antes do soak.

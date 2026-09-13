@@ -124,6 +124,10 @@ class PortfolioSnapshotRecord(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     cycles: Mapped[int] = mapped_column(Integer, default=0)
     errors: Mapped[int] = mapped_column(Integer, default=0)
+    reconciliation_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    last_reconciliation_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

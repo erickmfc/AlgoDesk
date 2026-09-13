@@ -28,13 +28,16 @@
 - [x] User Data Stream keepalive, reconnect hard stop and periodic reconciliation on Testnet
 - [x] Explicit in-sample/validation/out-of-sample research splits
 - [x] Stop/take-profit, spread, latency and partial-fill abstractions in the backtest
+- [x] Retry-safe Binance 429 backoff without retrying ambiguous order submissions
+- [x] Mode-scoped open-order reconciliation and persisted Testnet reconciliation state
+- [x] Makefile operator shortcuts for the documented local workflow
 
 ## Next implementation gates
 
 - [x] True walk-forward parameter selection using validation-only choice and untouched OOS scoring
 - [x] Restore Testnet base/quote balances and average entry price from Binance fills, fail-closed on mismatch
 - [x] Fail-closed market-cycle alert/pause policy for the long-running worker
-- [ ] Run Testnet soak test before any live-candidate review
+- [x] Run 12-cycle Testnet soak before any live-candidate review
 - [x] Add repeatable read-only runtime verification for health, readiness, market data, paper state and backtest
 - [x] Add read-only multi-cycle PAPER/Testnet soak runner with fail-closed mode and credential checks
 - [x] Make the base Docker Compose override the host SQLite URL with the internal PostgreSQL URL
