@@ -60,6 +60,20 @@ class BinancePublicClient:
             payload = [payload]
         return [Ticker(str(row["symbol"]), float(row["price"])) for row in payload]
 
+    def all_ticker_prices(self) -> list[Ticker]:
+        """Return the current spot prices in one public request."""
+        request = Request(
+            f"{self.base_url}/api/v3/ticker/price", headers={"User-Agent": "AlgoDesk/0.1"}
+        )
+        payload = _read_json(request, 12)
+        if not isinstance(payload, list):
+            raise ValueError("unexpected Binance ticker response")
+        return [
+            Ticker(str(row["symbol"]), float(row["price"]))
+            for row in payload
+            if isinstance(row, dict) and "symbol" in row and "price" in row
+        ]
+
     def exchange_info(self, symbol: str) -> dict[str, object]:
         query = urlencode({"symbol": symbol.upper()})
         request = Request(
