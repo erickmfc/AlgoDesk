@@ -1,0 +1,11 @@
+{$ALGODESK_DOMAIN} {
+	@api path /api/* /health /ready /ws/*
+
+	handle @api {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy dashboard:4173
+	}
+}

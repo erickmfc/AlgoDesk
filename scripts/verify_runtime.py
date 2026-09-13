@@ -45,7 +45,13 @@ def run_cycle(base_url: str, timeout: float) -> list[Check]:
             raise RuntimeError("readiness response is not an object")
         safe = ready.get("mode") != "live" and ready.get("live_trading_enabled") is False
         db = ready.get("database_connected") is True
-        checks.append(Check("readiness", safe and db, f"mode={ready.get('mode')} db={db} live={ready.get('live_trading_enabled')}"))
+        checks.append(
+            Check(
+                "readiness",
+                safe and db,
+                f"mode={ready.get('mode')} db={db} live={ready.get('live_trading_enabled')}",
+            )
+        )
     except (HTTPError, URLError, TimeoutError, ValueError, RuntimeError, OSError) as exc:
         checks.append(Check("readiness", False, str(exc)))
 
@@ -53,23 +59,47 @@ def run_cycle(base_url: str, timeout: float) -> list[Check]:
         (
             "market",
             "/api/market/ticker?symbol=BTCUSDT",
-            lambda value: isinstance(value, dict)
-            and value.get("source") == "binance-public-spot"
-            and isinstance(value.get("tickers"), list)
-            and any(
-                isinstance(ticker, dict)
-                and ticker.get("symbol") == "BTCUSDT"
-                and float(ticker.get("price", 0)) > 0
-                for ticker in value["tickers"]
+            lambda value: (
+                isinstance(value, dict)
+                and value.get("source") == "binance-public-spot"
+                and isinstance(value.get("tickers"), list)
+                and any(
+                    isinstance(ticker, dict)
+                    and ticker.get("symbol") == "BTCUSDT"
+                    and float(ticker.get("price", 0)) > 0
+                    for ticker in value["tickers"]
+                )
             ),
         ),
-        ("paper-summary", "/api/paper/summary", lambda value: isinstance(value, dict) and "status" in value),
-        ("backtest", "/api/backtests/binance?symbol=BTCUSDT&interval=1h&limit=100", lambda value: isinstance(value, dict) and int(value.get("data_points", 0)) > 0),
+        (
+            "paper-summary",
+            "/api/paper/summary",
+            lambda value: isinstance(value, dict) and "status" in value,
+        ),
+        (
+            "backtest",
+            "/api/backtests/binance?symbol=BTCUSDT&interval=1h&limit=100",
+            lambda value: isinstance(value, dict) and int(value.get("data_points", 0)) > 0,
+        ),
     ):
         try:
             value = get_json(base_url, path, timeout)
-            checks.append(Check(name, predicate(value), "ok" if predicate(value) else f"unexpected response: {value}"))
-        except (HTTPError, URLError, TimeoutError, ValueError, RuntimeError, TypeError, OSError) as exc:
+            checks.append(
+                Check(
+                    name,
+                    predicate(value),
+                    "ok" if predicate(value) else f"unexpected response: {value}",
+                )
+            )
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            ValueError,
+            RuntimeError,
+            TypeError,
+            OSError,
+        ) as exc:
             checks.append(Check(name, False, str(exc)))
     return checks
 

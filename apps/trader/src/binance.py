@@ -157,6 +157,16 @@ class BinancePrivateClient(BinancePublicClient):
             raise ValueError("unexpected Binance open orders response")
         return [row for row in payload if isinstance(row, dict)]
 
+    def all_orders(self, symbol: str, limit: int = 1000) -> list[dict[str, object]]:
+        payload = self._signed_request(
+            "GET",
+            "/api/v3/allOrders",
+            {"symbol": symbol.upper(), "limit": min(max(limit, 1), 1000)},
+        )
+        if not isinstance(payload, list):
+            raise ValueError("unexpected Binance all orders response")
+        return [row for row in payload if isinstance(row, dict)]
+
     def my_trades(self, symbol: str, limit: int = 100) -> list[dict[str, object]]:
         payload = self._signed_request(
             "GET", "/api/v3/myTrades", {"symbol": symbol.upper(), "limit": min(max(limit, 1), 1000)}

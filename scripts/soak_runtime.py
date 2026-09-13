@@ -29,7 +29,9 @@ def main() -> int:
         print(f"BLOCKED readiness: {exc}")
         return 2
     if not isinstance(ready, dict) or ready.get("mode") != args.require_mode:
-        print(f"BLOCKED mode: expected {args.require_mode}, got {ready.get('mode') if isinstance(ready, dict) else ready}")
+        print(
+            f"BLOCKED mode: expected {args.require_mode}, got {ready.get('mode') if isinstance(ready, dict) else ready}"
+        )
         return 2
     if args.require_mode == "testnet" and ready.get("account_configured") is not True:
         print("BLOCKED credentials: Binance Testnet API credentials are not configured")
@@ -39,7 +41,9 @@ def main() -> int:
     for cycle in range(args.cycles):
         checks = run_cycle(args.base_url, 10)
         failed = failed or any(not check.ok for check in checks)
-        print(f"soak cycle {cycle + 1}/{args.cycles}: {'PASS' if not any(not check.ok for check in checks) else 'FAIL'}")
+        print(
+            f"soak cycle {cycle + 1}/{args.cycles}: {'PASS' if not any(not check.ok for check in checks) else 'FAIL'}"
+        )
         if failed:
             for check in checks:
                 if not check.ok:

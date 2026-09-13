@@ -19,6 +19,8 @@ class Signal:
     action: str
     price: float
     reason: str
+    stop_price: float | None = None
+    take_profit_price: float | None = None
 
 
 def ema(values: list[float], period: int) -> list[float]:
@@ -52,28 +54,53 @@ def atr(candles: list[Candle], period: int = 14) -> list[float]:
 
 
 class EmaTrendStrategy:
-    def __init__(self, fast_period: int = 20, slow_period: int = 50) -> None:
+    def __init__(
+        self,
+        fast_period: int = 20,
+        slow_period: int = 50,
+        atr_period: int = 14,
+        stop_loss_atr: float = 0.0,
+        take_profit_atr: float = 0.0,
+    ) -> None:
         if fast_period >= slow_period:
             raise ValueError("fast EMA must be smaller than slow EMA")
+        if atr_period <= 0 or stop_loss_atr < 0 or take_profit_atr < 0:
+            raise ValueError("ATR and stop/take parameters must be non-negative")
         self.fast_period = fast_period
         self.slow_period = slow_period
+        self.atr_period = atr_period
+        self.stop_loss_atr = stop_loss_atr
+        self.take_profit_atr = take_profit_atr
 
     def signals(self, candles: list[Candle]) -> list[Signal]:
         closes = [candle.close for candle in candles]
         fast = ema(closes, self.fast_period)
         slow = ema(closes, self.slow_period)
+        atr_values = atr(candles, self.atr_period)
         signals: list[Signal] = []
         # Do not trade on the synthetic EMA seed; wait for a full slow window.
         for index in range(max(1, self.slow_period), len(candles)):
             crossed_up = fast[index] > slow[index] and fast[index - 1] <= slow[index - 1]
             crossed_down = fast[index] < slow[index] and fast[index - 1] >= slow[index - 1]
             if crossed_up:
+                volatility = atr_values[index]
+                price = candles[index].close
                 signals.append(
                     Signal(
                         candles[index].open_time,
                         "BUY",
-                        candles[index].close,
+                        price,
                         "fast EMA crossed above slow EMA",
+                        stop_price=(
+                            price - volatility * self.stop_loss_atr
+                            if self.stop_loss_atr and volatility > 0
+                            else None
+                        ),
+                        take_profit_price=(
+                            price + volatility * self.take_profit_atr
+                            if self.take_profit_atr and volatility > 0
+                            else None
+                        ),
                     )
                 )
             elif crossed_down:

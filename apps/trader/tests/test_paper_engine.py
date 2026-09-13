@@ -37,6 +37,38 @@ def test_paper_engine_routes_signal_through_risk_and_order_manager():
     assert engine.process_closed_candles(candles) == []
 
 
+def test_paper_engine_honors_atr_stop_from_strategy_config():
+    candles = [
+        Candle(index, value, value + 1, value - 1, value)
+        for index, value in enumerate([10, 9, 8, 9, 12, 14, 9, 8])
+    ]
+    engine = PaperEngine(
+        PaperEngineConfig(
+            starting_cash=1_000,
+            position_percent=50,
+            fast_period=2,
+            slow_period=4,
+            atr_period=2,
+            stop_loss_atr=1.0,
+        ),
+        risk=RiskEngine(
+            RiskConfig(
+                max_position_percent=50,
+                max_total_exposure_percent=100,
+                hard_drawdown_limit_percent=50,
+            )
+        ),
+    )
+
+    events = engine.process_closed_candles(candles)
+
+    assert any(
+        event.intent.side is OrderSide.SELL and event.intent.reason == "ATR stop loss reached"
+        for event in events
+    )
+    assert engine.snapshot()["open_positions"] == 0
+
+
 def test_paper_runtime_hard_stop_rejects_new_intents():
     runtime = PaperRuntime(BinancePublicClient())
     runtime.engine = PaperEngine(PaperEngineConfig(fast_period=2, slow_period=4))

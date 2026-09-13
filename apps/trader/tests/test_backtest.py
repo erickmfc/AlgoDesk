@@ -23,6 +23,17 @@ def test_strategy_uses_closed_candle_crossovers():
     assert [signal.action for signal in signals] == ["BUY", "SELL"]
 
 
+def test_strategy_attaches_configured_atr_exit_levels():
+    signals = EmaTrendStrategy(2, 4, atr_period=2, stop_loss_atr=1.0, take_profit_atr=2.0).signals(
+        candles([10, 9, 8, 9, 12, 14, 10, 7])
+    )
+
+    buy = next(signal for signal in signals if signal.action == "BUY")
+    assert buy.stop_price is not None
+    assert buy.take_profit_price is not None
+    assert buy.stop_price < buy.price < buy.take_profit_price
+
+
 def test_backtest_applies_fees_and_slippage():
     result, trades = run_backtest(
         candles([10, 9, 8, 9, 12, 14, 10, 7]),

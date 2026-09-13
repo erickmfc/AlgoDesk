@@ -15,9 +15,9 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r apps/trader/requirements-dev.txt
       - name: Ruff lint
-        run: ruff check apps/trader/src apps/trader/tests
+        run: ruff check apps/trader/src apps/trader/tests scripts
       - name: Ruff format check
-        run: ruff format --check apps/trader/src apps/trader/tests
+        run: ruff format --check apps/trader/src apps/trader/tests scripts
       - name: Mypy
         run: mypy apps/trader/src
       - name: Pytest

@@ -25,13 +25,15 @@ from .backtest import (
     run_walk_forward,
 )
 from .binance import BinanceMarketStream, BinancePrivateClient, BinancePublicClient
-from .config_loader import risk_config_from_yaml
+from .config_loader import paper_engine_config_from_yaml, risk_config_from_yaml
 from .core import RiskEngine
 from .database import (
     init_db,
     latest_account_balances,
     latest_runtime_summary,
+    local_fill_order_ids,
     local_open_order_ids,
+    local_order_ids,
     ping_db,
     recent_paper_events,
     recent_runtime_equity,
@@ -280,7 +282,7 @@ def paper_events(response: Response) -> dict[str, object]:
                 "bot": event.intent.strategy_id,
                 "label": status,
                 "tone": tone,
-                "text": f"{event.intent.side.value} {event.intent.symbol} @ ${event.intent.price:,.2f} · {event.decision.reason}",
+                "text": f"{event.intent.side.value} {event.intent.symbol} @ ${event.intent.price:,.2f} · {event.intent.reason or event.decision.reason}",
             }
         )
     return {"source": runtime.summary()["source"], "events": events}
@@ -437,6 +439,14 @@ def system_metrics(response: Response) -> dict[str, object]:
     )
     runtime_errors = runtime_summary.get("errors", 0) if runtime_summary else 0
     error_count = runtime_errors if isinstance(runtime_errors, int) else 0
+    runtime_reconciliation_status = (
+        str(runtime_summary.get("reconciliation_status", reconciliation_status))
+        if runtime_summary
+        else reconciliation_status
+    )
+    runtime_last_reconciliation = (
+        runtime_summary.get("last_reconciliation_at") if runtime_summary else None
+    )
     return {
         "mode": settings.trading_mode,
         "live_trading_enabled": settings.live_trading_enabled,
@@ -459,10 +469,9 @@ def system_metrics(response: Response) -> dict[str, object]:
             if runtime_summary
             else "UNKNOWN"
         ),
-        "reconciliation_status": reconciliation_status,
-        "last_reconciliation_at": last_reconciliation_at.isoformat()
-        if last_reconciliation_at
-        else None,
+        "reconciliation_status": runtime_reconciliation_status,
+        "last_reconciliation_at": runtime_last_reconciliation
+        or (last_reconciliation_at.isoformat() if last_reconciliation_at else None),
     }
 
 
@@ -536,7 +545,7 @@ def account_summary(response: Response) -> dict[str, object]:
 
 
 @app.get("/api/account/reconcile")
-def account_reconcile(response: Response) -> dict[str, object]:
+def account_reconcile(response: Response, symbol: str = "BTCUSDT") -> dict[str, object]:
     global last_reconciliation_at, reconciliation_status, reconciliation_error
     response.headers["Cache-Control"] = "no-store"
     if not account_client.configured:
@@ -550,6 +559,16 @@ def account_reconcile(response: Response) -> dict[str, object]:
             account_client,
             local_balances=latest_account_balances(),
             local_open_order_ids=local_open_order_ids(),
+            local_order_ids=local_order_ids(settings.trading_mode),
+            local_fill_order_ids=local_fill_order_ids(settings.trading_mode),
+            symbol=symbol.upper(),
+            managed_client_prefix=(
+                "AD-T-"
+                if settings.trading_mode == "testnet"
+                else "AD-L-"
+                if settings.trading_mode == "live"
+                else None
+            ),
         )
         last_reconciliation_at = datetime.now(timezone.utc)
         reconciliation_status = result.status
@@ -560,6 +579,10 @@ def account_reconcile(response: Response) -> dict[str, object]:
             "missing_local_orders": result.missing_local_orders,
             "unknown_remote_orders": result.unknown_remote_orders,
             "remote_open_orders": result.remote_open_orders,
+            "missing_local_fills": result.missing_local_fills,
+            "unknown_remote_fills": result.unknown_remote_fills,
+            "remote_orders": result.remote_orders,
+            "remote_fills": result.remote_fills,
         }
     except Exception as exc:
         reconciliation_status = "ERROR"
@@ -608,10 +631,15 @@ def binance_backtest(
         # Historical research remains available if the optional filter lookup
         # is temporarily unavailable; the response exposes the assumption.
         runtime_filters = None
+    strategy_config = paper_engine_config_from_yaml()
     config = BacktestConfig(
-        fast_period=20,
-        slow_period=50,
-        position_percent=10,
+        fast_period=strategy_config.fast_period,
+        slow_period=strategy_config.slow_period,
+        atr_period=strategy_config.atr_period,
+        stop_loss_atr=strategy_config.stop_loss_atr,
+        take_profit_atr=strategy_config.take_profit_atr,
+        position_percent=strategy_config.position_percent,
+        fee_bps=strategy_config.fee_bps,
         spread_bps=2.0,
         latency_bars=1,
         min_quantity=float(runtime_filters.min_quantity) if runtime_filters else 0.0,

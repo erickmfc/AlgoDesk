@@ -145,19 +145,31 @@ def save_paper_snapshot(
 
 
 def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
-    """Persist paper signals, intents, orders and fills idempotently."""
+    """Persist paper signals, intents, orders and fills idempotently.
+
+    A PAPER worker replays a bounded closed-candle window after restart.  The
+    same intent can therefore be observed again with a newer broker result
+    (for example an old rejection becoming a filled protective exit after a
+    risk-rule fix).  Treat the order row as an idempotent upsert and append an
+    order event only when its observable state changed.
+    """
     if not events:
         return 0
     with SessionLocal() as session:
-        inserted = 0
+        changed = 0
         for event in events:
             intent = event.intent
             order = event.order
             client_key = f"{mode.upper()}-{intent.idempotency_key}"
             order_id = client_key
-            if session.get(OrderRecord, order_id) is not None:
-                continue
             created_at = order.created_at
+            reason = intent.reason or event.decision.reason
+            raw_response = json.dumps(
+                order.raw_response or {"broker": mode},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
             if session.get(SignalRecord, client_key) is None:
                 session.add(
                     SignalRecord(
@@ -168,10 +180,16 @@ def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
                         action=intent.side.value,
                         price=intent.price,
                         candle_timestamp=intent.candle_timestamp,
-                        reason=event.decision.reason,
+                        reason=reason,
                         created_at=created_at,
                     )
                 )
+                changed += 1
+            else:
+                signal = session.get(SignalRecord, client_key)
+                if signal is not None and signal.reason != reason:
+                    signal.reason = reason
+                    changed += 1
             existing_intent = session.get(TradeIntentRecord, client_key)
             if existing_intent is None:
                 session.add(
@@ -184,52 +202,110 @@ def save_paper_events(events: Iterable[PaperEvent], mode: str = "paper") -> int:
                         price=intent.price,
                         candle_timestamp=intent.candle_timestamp,
                         strategy_version=intent.strategy_version,
-                        reason=event.decision.reason,
+                        reason=reason,
                         status=order.status.value,
                         created_at=created_at,
                     )
                 )
+                changed += 1
             else:
-                existing_intent.reason = event.decision.reason
-                existing_intent.status = order.status.value
-            session.add(
-                OrderRecord(
-                    order_id=order_id,
-                    client_order_id=order.client_order_id,
-                    symbol=intent.symbol,
-                    side=intent.side.value,
-                    status=order.status.value,
-                    raw_response=json.dumps(
-                        order.raw_response or {"broker": mode},
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        default=str,
-                    ),
-                    updated_at=created_at,
+                if existing_intent.reason != reason or existing_intent.status != order.status.value:
+                    existing_intent.reason = reason
+                    existing_intent.status = order.status.value
+                    changed += 1
+
+            existing_order = session.get(OrderRecord, order_id)
+            if existing_order is None:
+                session.add(
+                    OrderRecord(
+                        order_id=order_id,
+                        client_order_id=order.client_order_id,
+                        symbol=intent.symbol,
+                        side=intent.side.value,
+                        status=order.status.value,
+                        raw_response=raw_response,
+                        updated_at=created_at,
+                    )
                 )
-            )
-            session.add(
-                OrderEventRecord(
-                    order_id=order_id,
-                    status=order.status.value,
-                    details=event.decision.reason,
-                    created_at=created_at,
+                session.add(
+                    OrderEventRecord(
+                        order_id=order_id,
+                        status=order.status.value,
+                        details=reason,
+                        created_at=created_at,
+                    )
                 )
+                if order.filled_quantity > 0:
+                    session.add(
+                        FillRecord(
+                            order_id=order_id,
+                            price=intent.price,
+                            quantity=order.filled_quantity,
+                            fee=order.fee,
+                            filled_at=created_at,
+                        )
+                    )
+                changed += 1
+                continue
+
+            # Replays update the current idempotent order instead of leaving a
+            # stale REJECTED/SUBMITTED row in the dashboard forever.
+            observed_at = datetime.now(timezone.utc)
+            if (
+                existing_order.client_order_id != order.client_order_id
+                or existing_order.symbol != intent.symbol
+                or existing_order.side != intent.side.value
+                or existing_order.status != order.status.value
+                or existing_order.raw_response != raw_response
+            ):
+                existing_order.client_order_id = order.client_order_id
+                existing_order.symbol = intent.symbol
+                existing_order.side = intent.side.value
+                existing_order.status = order.status.value
+                existing_order.raw_response = raw_response
+                existing_order.updated_at = observed_at
+                changed += 1
+
+            latest_event = session.scalar(
+                select(OrderEventRecord)
+                .where(OrderEventRecord.order_id == order_id)
+                .order_by(OrderEventRecord.created_at.desc(), OrderEventRecord.id.desc())
             )
-            if order.filled_quantity > 0:
+            if (
+                latest_event is None
+                or latest_event.status != order.status.value
+                or latest_event.details != reason
+            ):
+                session.add(
+                    OrderEventRecord(
+                        order_id=order_id,
+                        status=order.status.value,
+                        details=reason,
+                        created_at=observed_at,
+                    )
+                )
+                existing_order.updated_at = observed_at
+                changed += 1
+
+            fills = session.scalars(select(FillRecord).where(FillRecord.order_id == order_id)).all()
+            previous_quantity = sum(float(fill.quantity) for fill in fills)
+            previous_fee = sum(float(fill.fee) for fill in fills)
+            delta = max(0.0, float(order.filled_quantity) - previous_quantity)
+            if delta > 1e-12:
                 session.add(
                     FillRecord(
                         order_id=order_id,
                         price=intent.price,
-                        quantity=order.filled_quantity,
-                        fee=order.fee,
-                        filled_at=created_at,
+                        quantity=delta,
+                        fee=max(0.0, float(order.fee) - previous_fee),
+                        filled_at=observed_at,
                     )
                 )
-            inserted += 1
-        if inserted:
+                existing_order.updated_at = observed_at
+                changed += 1
+        if changed:
             session.commit()
-        return inserted
+        return changed
 
 
 def save_execution_report(
@@ -312,7 +388,7 @@ def reserve_trade_intent(intent: TradeIntent, mode: str = "paper") -> None:
                     price=intent.price,
                     candle_timestamp=intent.candle_timestamp,
                     strategy_version=intent.strategy_version,
-                    reason="intent reserved before broker submission",
+                    reason=intent.reason or "intent reserved before broker submission",
                     status="CREATED",
                     created_at=datetime.now(timezone.utc),
                 )
@@ -366,6 +442,29 @@ def local_open_order_ids() -> set[str]:
         return set(rows)
 
 
+def local_order_ids(mode: str = "paper") -> set[str]:
+    """Return every durable client order id for one execution mode."""
+    prefix = f"{mode.upper()}-"
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(OrderRecord.client_order_id).where(OrderRecord.order_id.like(f"{prefix}%"))
+        ).all()
+        return set(rows)
+
+
+def local_fill_order_ids(mode: str = "paper") -> set[str]:
+    """Return client ids for durable orders that have at least one fill."""
+    prefix = f"{mode.upper()}-"
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(OrderRecord.client_order_id)
+            .join(FillRecord, FillRecord.order_id == OrderRecord.order_id)
+            .where(OrderRecord.order_id.like(f"{prefix}%"))
+            .distinct()
+        ).all()
+        return set(rows)
+
+
 def runtime_order_metrics(mode: str = "paper") -> dict[str, int]:
     """Return durable order counts for the stateless API metrics surface."""
     prefix = f"{mode.upper()}-"
@@ -415,7 +514,13 @@ def latest_runtime_summary(mode: str = "paper") -> dict[str, object] | None:
 
 
 def recent_paper_events(mode: str = "paper", limit: int = 20) -> list[dict[str, object]]:
-    """Read persisted order decisions for the API-only process."""
+    """Read recent persisted order decisions for the API-only process.
+
+    The audit tables retain every order, while this compact activity feed
+    collapses identical visible messages from replayed candle windows.  The
+    query is newest-first, so a current FILLED result wins over an older
+    repeated rejection with the same symbol, side, price and reason.
+    """
     prefix = f"{mode.upper()}-"
     with SessionLocal() as session:
         orders = session.scalars(
@@ -425,6 +530,7 @@ def recent_paper_events(mode: str = "paper", limit: int = 20) -> list[dict[str, 
             .limit(limit)
         ).all()
         result: list[dict[str, object]] = []
+        visible_keys: set[tuple[str, str, str, float, str]] = set()
         for order in orders:
             intent = session.get(TradeIntentRecord, order.order_id)
             if intent is None and order.order_id.startswith(prefix):
@@ -444,6 +550,16 @@ def recent_paper_events(mode: str = "paper", limit: int = 20) -> list[dict[str, 
                 )
             if intent is None:
                 continue
+            visible_key = (
+                intent.strategy_id,
+                intent.symbol,
+                intent.side,
+                round(float(intent.price), 8),
+                event.details if event else intent.reason or "",
+            )
+            if visible_key in visible_keys:
+                continue
+            visible_keys.add(visible_key)
             result.append(
                 {
                     "created_at": order.updated_at,

@@ -1,7 +1,9 @@
 services:
   dashboard:
+    ports: []
     restart: unless-stopped
   api:
+    ports: []
     volumes:
       - ./configs:/app/configs:ro
     restart: unless-stopped
@@ -13,3 +15,24 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+    environment:
+      - ALGODESK_DOMAIN=${ALGODESK_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

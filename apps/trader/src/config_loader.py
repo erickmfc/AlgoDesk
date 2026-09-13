@@ -40,11 +40,40 @@ def paper_engine_config_from_yaml(
     payload = _yaml_mapping(path).get("strategy", {})
     if not isinstance(payload, Mapping):
         raise ValueError("strategy configuration must be a mapping")
+    allowed = {
+        "id",
+        "type",
+        "symbol",
+        "interval",
+        "enabled",
+        "strategy_version",
+        "starting_cash",
+        "position_percent",
+        "fee_bps",
+        "fast_ema",
+        "slow_ema",
+        "atr_period",
+        "stop_loss_atr",
+        "take_profit_atr",
+    }
+    unknown = set(payload) - allowed
+    if unknown:
+        raise ValueError(f"unsupported strategy configuration: {', '.join(sorted(unknown))}")
+    if str(payload.get("type", "ema_trend")).lower() != "ema_trend":
+        raise ValueError("only ema_trend is enabled in this release")
     mapped = {
         "strategy_id": payload.get("id", PaperEngineConfig.strategy_id),
+        "strategy_version": payload.get("strategy_version", PaperEngineConfig.strategy_version),
         "symbol": payload.get("symbol", PaperEngineConfig.symbol),
+        "interval": payload.get("interval", PaperEngineConfig.interval),
+        "starting_cash": payload.get("starting_cash", PaperEngineConfig.starting_cash),
+        "position_percent": payload.get("position_percent", PaperEngineConfig.position_percent),
+        "fee_bps": payload.get("fee_bps", PaperEngineConfig.fee_bps),
         "fast_period": payload.get("fast_ema", PaperEngineConfig.fast_period),
         "slow_period": payload.get("slow_ema", PaperEngineConfig.slow_period),
+        "atr_period": payload.get("atr_period", PaperEngineConfig.atr_period),
+        "stop_loss_atr": payload.get("stop_loss_atr", PaperEngineConfig.stop_loss_atr),
+        "take_profit_atr": payload.get("take_profit_atr", PaperEngineConfig.take_profit_atr),
     }
     if not bool(payload.get("enabled", True)):
         raise ValueError("configured strategy is disabled")

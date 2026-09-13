@@ -34,6 +34,9 @@ class TradeIntent:
     price: float
     candle_timestamp: int
     strategy_version: str = "v1"
+    stop_price: float | None = None
+    take_profit_price: float | None = None
+    reason: str = ""
 
     @property
     def idempotency_key(self) -> str:
@@ -87,6 +90,9 @@ class RiskEngine:
         self.config = config or RiskConfig()
         self.soft_stop = False
         self.hard_stop = False
+        self.account_synchronized = True
+        self.api_healthy = True
+        self.symbol_available = True
 
     def evaluate(
         self, intent: TradeIntent, portfolio: Portfolio, *, market_age_seconds: int = 0
@@ -102,8 +108,21 @@ class RiskEngine:
             return RiskDecision(False, "hard kill switch active", tuple(checks))
         if self.soft_stop and intent.side is OrderSide.BUY:
             return RiskDecision(False, "soft kill switch active", tuple(checks))
+        if not self.api_healthy:
+            return RiskDecision(False, "Binance API health check failed", tuple(checks))
+        if not self.account_synchronized:
+            return RiskDecision(False, "account is not synchronized", tuple(checks))
+        if not self.symbol_available:
+            return RiskDecision(False, "symbol is not available", tuple(checks))
         if intent.quantity <= 0 or intent.price <= 0:
             return RiskDecision(False, "quantity and price must be positive", tuple(checks))
+        if intent.side is OrderSide.BUY and intent.stop_price is not None:
+            if not 0 < intent.stop_price < intent.price:
+                return RiskDecision(False, "buy stop must be below entry price", tuple(checks))
+            risk_value = (intent.price - intent.stop_price) * intent.quantity
+            risk_percent = risk_value / portfolio.equity * 100 if portfolio.equity else 100
+            if risk_percent > self.config.risk_per_trade_percent:
+                return RiskDecision(False, "risk per trade exceeds limit", tuple(checks))
         if market_age_seconds > self.config.stale_market_data_seconds:
             return RiskDecision(False, "market data is stale", tuple(checks))
         if (
@@ -113,17 +132,18 @@ class RiskEngine:
             return RiskDecision(False, "maximum concurrent positions reached", tuple(checks))
         position_value = intent.quantity * intent.price
         position_percent = position_value / portfolio.equity * 100 if portfolio.equity else 100
-        if position_percent > self.config.max_position_percent:
-            return RiskDecision(False, "position exposure exceeds limit", tuple(checks))
-        if (
-            portfolio.total_exposure_percent + position_percent
-            > self.config.max_total_exposure_percent
-        ):
-            return RiskDecision(False, "portfolio exposure exceeds limit", tuple(checks))
-        if portfolio.daily_loss_percent >= self.config.daily_loss_limit_percent:
-            return RiskDecision(False, "daily loss limit reached", tuple(checks))
-        if portfolio.drawdown_percent >= self.config.hard_drawdown_limit_percent:
-            return RiskDecision(False, "hard drawdown limit reached", tuple(checks))
+        if intent.side is OrderSide.BUY:
+            if position_percent > self.config.max_position_percent:
+                return RiskDecision(False, "position exposure exceeds limit", tuple(checks))
+            if (
+                portfolio.total_exposure_percent + position_percent
+                > self.config.max_total_exposure_percent
+            ):
+                return RiskDecision(False, "portfolio exposure exceeds limit", tuple(checks))
+            if portfolio.daily_loss_percent >= self.config.daily_loss_limit_percent:
+                return RiskDecision(False, "daily loss limit reached", tuple(checks))
+            if portfolio.drawdown_percent >= self.config.hard_drawdown_limit_percent:
+                return RiskDecision(False, "hard drawdown limit reached", tuple(checks))
         if intent.side is OrderSide.BUY and position_value > portfolio.balance_available:
             return RiskDecision(False, "insufficient available balance", tuple(checks))
         return RiskDecision(True, "risk checks passed", tuple(checks))

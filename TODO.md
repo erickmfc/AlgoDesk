@@ -12,6 +12,7 @@
 - [x] Public Binance Spot WebSocket mini-ticker with heartbeat and reconnect backoff
 - [x] Optional signed, server-side, read-only Binance account summary endpoint
 - [x] EMA/ATR strategy primitives and backtest with fees/slippage
+- [x] YAML-driven ATR stop/take exits and risk-per-trade sizing in PAPER/Testnet
 - [x] Extended research metrics and buy-and-hold comparison for the demo run
 - [x] PostgreSQL-ready SQLAlchemy schema for core trading records
 - [x] Typed settings, local SQLite persistence bootstrap and Docker healthchecks
@@ -20,6 +21,7 @@
 - [x] PAPER candle-close runner through Strategy → Risk → OrderManager → Broker
 - [x] Persist PAPER signals, intents, orders, events, fills and snapshots
 - [x] Read-only account reconciliation primitives and User Data Stream adapter
+- [x] Reconcile managed order history and fills in addition to balances/open orders
 - [x] Separate `api` and `trader` Compose services with shared PostgreSQL snapshots
 - [x] Persisted runtime summaries/events for a stateless API process
 - [x] Binance Spot Testnet broker gate with exchange filters and remote idempotency lookup
@@ -36,3 +38,6 @@
 - [x] Add repeatable read-only runtime verification for health, readiness, market data, paper state and backtest
 - [x] Add read-only multi-cycle PAPER/Testnet soak runner with fail-closed mode and credential checks
 - [x] Make the base Docker Compose override the host SQLite URL with the internal PostgreSQL URL
+- [x] Add VPS Caddy proxy and operator diagnostics/backup scripts
+- [x] Add bounded Docker logs, PostgreSQL backup, one-command diagnosis and recovery documentation
+- [x] Keep local Compose mode configurable for PAPER and Testnet

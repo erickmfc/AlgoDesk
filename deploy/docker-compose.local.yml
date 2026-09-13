@@ -19,6 +19,6 @@ services:
       - APPLICATION_ROLE=trader
       - APP_PORT=8001
       - RUN_MIGRATIONS=true
-      - TRADING_MODE=paper
-      - LIVE_TRADING_ENABLED=false
+      - TRADING_MODE=${TRADING_MODE:-paper}
+      - LIVE_TRADING_ENABLED=${LIVE_TRADING_ENABLED:-false}
       - DATABASE_URL=postgresql+psycopg://algodesk:algodesk@postgres:5432/algodesk

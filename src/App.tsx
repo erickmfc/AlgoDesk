@@ -189,7 +189,11 @@ function pageForPath(pathname: string) {
 function runtimeApiUrl() {
   const configured = process.env.NEXT_PUBLIC_API_URL?.trim()
   if (configured) return configured.replace(/\/$/, '')
-  if (typeof window !== 'undefined') return `${window.location.protocol}//${window.location.hostname}:8000`
+  if (typeof window !== 'undefined') {
+    const localDevPort = window.location.port === '3000' || window.location.port === '4173'
+    if (localDevPort) return `${window.location.protocol}//${window.location.hostname}:8000`
+    return window.location.origin
+  }
   return 'http://localhost:8000'
 }
 
@@ -298,7 +302,9 @@ function App() {
   const [hardStopped, setHardStopped] = useState(false)
   const [enableText, setEnableText] = useState('')
   const [notice, setNotice] = useState('')
-  const [clock, setClock] = useState(new Date())
+  // Keep the server and first client render identical; the real clock starts
+  // after hydration to avoid a React hydration mismatch in the live dashboard.
+  const [clock, setClock] = useState<Date | null>(null)
   const [livePrices, setLivePrices] = useState<Record<string, number>>({})
   const [feedStatus, setFeedStatus] = useState<FeedStatus>('offline')
   const [accountStatus, setAccountStatus] = useState<AccountStatus>('loading')
@@ -314,7 +320,12 @@ function App() {
   const [riskConfig, setRiskConfig] = useState<RiskConfig | null>(null)
   const [equityPoints, setEquityPoints] = useState<EquityPoint[]>([])
 
-  useEffect(() => { setActivePage(pageForPath(window.location.pathname)); const timer = window.setInterval(() => setClock(new Date()), 1000); return () => window.clearInterval(timer) }, [])
+  useEffect(() => {
+    setActivePage(pageForPath(window.location.pathname))
+    setClock(new Date())
+    const timer = window.setInterval(() => setClock(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
   useEffect(() => {
     const onPopState = () => setActivePage(pageForPath(window.location.pathname))
     window.addEventListener('popstate', onPopState)
@@ -430,7 +441,7 @@ function App() {
   const bots = useMemo(() => buildDeskBots(paperSummary, hardStopped), [paperSummary, hardStopped])
   const visibleBots = useMemo(() => bots.filter((bot) => `${bot.id} ${bot.symbol} ${bot.strategy} ${bot.status}`.toLowerCase().includes(search.toLowerCase())), [bots, search])
   const botsOnline = paperSummary?.status === 'running' ? paperSummary.bot_count : 0
-  const currentTime = clock.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const currentTime = clock?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) ?? '--:--:--'
   const displayActivities: PaperActivity[] = paperActivities.length ? paperActivities : [{ time: '—', bot: 'PAPER', label: paperSummary?.status === 'error' ? 'ERRO' : 'AGUARDANDO', tone: paperSummary?.status === 'error' ? 'red' : 'amber', text: paperSummary?.status === 'error' ? (paperSummary.last_error ?? 'Motor PAPER indisponível') : 'Aguardando o primeiro sinal de candle fechado' }]
 
   const selectBot = (bot: DeskBot) => { setSelectedBot(bot); setNotice(`${bot.id} selecionado para inspeção`) }

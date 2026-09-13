@@ -11,7 +11,9 @@ from .config_loader import paper_engine_config_from_yaml, risk_config_from_yaml
 from .core import RiskEngine
 from .database import (
     latest_account_balances,
+    local_fill_order_ids,
     local_open_order_ids,
+    local_order_ids,
     reserve_trade_intent,
     save_account_balances,
     save_candles,
@@ -85,12 +87,15 @@ def reconstructed_entry_price(
 class TestnetRuntime:
     market_client: BinancePublicClient
     account_client: BinancePrivateClient
-    symbol: str = "BTCUSDT"
-    interval: str = "1h"
+    symbol: str = ""
+    interval: str = ""
     poll_seconds: int = 60
     reconcile_seconds: int = 300
 
     def __post_init__(self) -> None:
+        configured = paper_engine_config_from_yaml()
+        self.symbol = self.symbol or configured.symbol
+        self.interval = self.interval or configured.interval
         self.broker = BinanceSpotBroker(
             self.account_client,
             trading_mode="testnet",
@@ -101,6 +106,7 @@ class TestnetRuntime:
             broker=self.broker,
             before_submit=lambda intent, _decision: reserve_trade_intent(intent, "testnet"),
         )
+        self.engine.risk.account_synchronized = not self.account_client.configured
         self.state = "not_configured" if not self.account_client.configured else "starting"
         self.last_run_at: datetime | None = None
         self.last_candle_at: datetime | None = None
@@ -189,6 +195,7 @@ class TestnetRuntime:
                 self.last_error = str(exc)
                 self.error_count += 1
                 self.engine.risk.hard_stop = True
+                self.engine.risk.account_synchronized = False
                 self._persist_snapshot()
                 emit_alert(
                     "testnet cycle failed",
@@ -207,6 +214,7 @@ class TestnetRuntime:
             self.state = "trading_paused"
             self.last_error = str(exc)
             self.engine.risk.hard_stop = True
+            self.engine.risk.account_synchronized = False
             self._persist_snapshot()
 
     async def _on_account_event(self, event: dict[str, object]) -> None:
@@ -230,6 +238,7 @@ class TestnetRuntime:
                 )
                 if not applied or not persisted:
                     self.engine.risk.hard_stop = True
+                    self.engine.risk.account_synchronized = False
                     self.last_error = "untracked Testnet execution report; trading paused"
                     emit_alert(
                         "untracked Testnet execution report",
@@ -249,6 +258,7 @@ class TestnetRuntime:
 
     async def _on_stream_reconnect(self) -> None:
         self.engine.risk.hard_stop = True
+        self.engine.risk.account_synchronized = False
         try:
             result = await self._reconcile()
             if result.status == "SYNCED":
@@ -349,9 +359,14 @@ class TestnetRuntime:
             self.account_client,
             local_balances=local_balances,
             local_open_order_ids=local_open_order_ids(),
+            local_order_ids=local_order_ids("testnet"),
+            local_fill_order_ids=local_fill_order_ids("testnet"),
+            symbol=self.symbol,
+            managed_client_prefix="AD-T-",
         )
         self.last_reconciliation_at = datetime.now(timezone.utc)
         self.reconciliation_status = result.status
+        self.engine.risk.account_synchronized = result.status == "SYNCED"
         if result.status == "DIVERGED":
             self.engine.risk.hard_stop = True
         return result
@@ -415,6 +430,24 @@ class TestnetRuntime:
         }
 
     def _closed_candles(self, candles: list[Candle]) -> list[Candle]:
-        interval_ms = 60 * 60 * 1000
+        interval_ms = {
+            "1m": 60,
+            "3m": 180,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "1h": 3600,
+            "2h": 7200,
+            "4h": 14400,
+            "6h": 21600,
+            "8h": 28800,
+            "12h": 43200,
+            "1d": 86400,
+            "3d": 259200,
+            "1w": 604800,
+        }.get(self.interval)
+        if interval_ms is None:
+            raise ValueError(f"unsupported Binance interval: {self.interval}")
+        interval_ms *= 1000
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         return [candle for candle in candles if candle.open_time + interval_ms <= now_ms]

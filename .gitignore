@@ -10,5 +10,8 @@ __pycache__/
 data/*.db
 **/data/*.db
 data/*.csv
+data/*.json
+data/market/
 data/postgres/
+data/backups/
 coverage.xml

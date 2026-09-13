@@ -9,7 +9,9 @@
     "start": "next start --hostname 0.0.0.0 --port 4173",
     "lint": "tsc --noEmit",
     "verify:runtime": "python scripts/verify_runtime.py --base-url http://127.0.0.1:8000",
-    "soak:runtime": "python scripts/soak_runtime.py --base-url http://127.0.0.1:8000 --cycles 12 --interval 5"
+    "soak:runtime": "python scripts/soak_runtime.py --base-url http://127.0.0.1:8000 --cycles 12 --interval 5",
+    "ops:diagnose": "powershell -ExecutionPolicy Bypass -File .\\scripts\\diagnose.ps1",
+    "backup:db": "powershell -ExecutionPolicy Bypass -File .\\scripts\\backup-postgres.ps1"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.3",

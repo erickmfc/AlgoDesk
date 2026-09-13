@@ -78,3 +78,31 @@ são aceitas somente pelo endpoint Testnet. Não use chaves de produção neste
 modo e não altere `LIVE_TRADING_ENABLED` durante esta fase.
 
 Consulte [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md), [TODO.md](TODO.md) e a documentação em `docs/` antes de configurar credenciais Testnet. Nenhuma chave é necessária para o modo PAPER.
+
+No VPS, configure o DNS e suba o mesmo stack com o proxy HTTPS:
+
+```bash
+export ALGODESK_DOMAIN=algo.example.com
+docker compose -f docker-compose.yml -f deploy/docker-compose.vps.yml up -d --build
+```
+
+O arquivo `deploy/Caddyfile` encaminha `/api`, `/health`, `/ready` e `/ws`
+para o backend e mantém as portas internas do dashboard/API fora da internet.
+
+## Utilitários read-only
+
+Com o stack iniciado, os fluxos operacionais também podem ser executados por
+script:
+
+```powershell
+python scripts/download_data.py --symbol BTCUSDT --interval 1h --limit 500
+python scripts/backtest.py --symbol BTCUSDT --interval 1h --limit 500 --output data/backtest-btc.json
+python scripts/paper.py
+python scripts/reconcile.py --symbol BTCUSDT
+```
+
+O download e o backtest usam somente dados públicos; `paper.py` apenas lê o
+estado do worker; `reconcile.py` apenas consulta a conta quando credenciais
+server-side estão configuradas.
+
+Para operação e recuperação, consulte [docs/operations.md](docs/operations.md). Os comandos `scripts/diagnose.ps1` e `scripts/backup-postgres.ps1` são os atalhos recomendados para o uso diário.
